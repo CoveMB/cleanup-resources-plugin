@@ -1,6 +1,6 @@
 # Cleanup Resources Plugin
 
-Read-only task/project/global development disk review through one Codex skill and a standalone Python helper. Reviews can produce assessed frozen plans. **No apply, approval-execution or deletion command exists.**
+Read-only task/project/global development disk review through one Codex skill and a standalone Python helper. Reviews can produce assessed frozen plans. **No apply, approval-execution or deletion command exists.** Bounded installed-host observations and their limits are recorded below.
 
 ## Run a review
 
@@ -13,7 +13,7 @@ python3 skills/task-disk-review/scripts/devspace.py review --project "/path/to/p
   --assessment "/path/to/assessment.json" --plan-output "/outside/review-plan.json"
 ```
 
-Without assessment/context inputs, the terminal helper still reports observations and unknowns. It needs no model, account, chat history or package manager. The packaged `task-disk-review` skill uses the same helper and can gather selected contextual evidence. Follow [OpenAI's installation documentation](https://developers.openai.com/plugins/build/plugins). No installer, hook, settings change or background process is bundled. Actual installed CLI/desktop invocation remains unverified.
+Without assessment/context inputs, the terminal helper still reports observations and unknowns. It needs no model, account, chat history or package manager. The packaged `task-disk-review` skill uses the same helper and can gather selected contextual evidence. Follow [OpenAI's installation documentation](https://developers.openai.com/plugins/build/plugins). No installer, hook, settings change or background process is bundled. See the bounded installed CLI/desktop invocation observations below; they cover the identified runtime subject only.
 
 Task mode stays within its selected directory. Project mode supports non-Git projects and inventories Git-discovered linked worktrees when the selected project is itself a worktree root. Nested selections do not expand into their parent repository. Worktrees/branches remain report-only. Status includes staged, dirty, untracked, ignored, locked, detached and locally unpushed states; missing upstream/activity stays unknown. No fetch occurs. Git status inspection refuses configured clean/process filters because even status can execute them, including unused global LFS filters. Submodule contents and collapsed ignored-directory contents are not inspected by Git inventory.
 
@@ -49,7 +49,29 @@ Docker is optional: only the installed CLI's `--host unix:///... system df --for
 
 Effective Codex CLI and desktop automatic-retention settings are **independently unknown**: no supported installed-version machine-readable interface is established here. No default count, inferred disabled setting or guarantee of ignored-file snapshot recovery is reported. Independent Codex cleanup may remove worktrees the plugin recommends retaining; plugin holds cannot control it. Consult installed settings and verify actual behavior during host certification. Current official [worktree documentation](https://learn.chatgpt.com/docs/environments/git-worktrees) describes handoff/restore and independent cleanup; it does not establish this host's effective configuration. [Docker usage](https://docs.docker.com/reference/cli/docker/system/df/) and [Desktop storage](https://docs.docker.com/desktop/troubleshoot-and-support/faqs/macfaqs/) explain summary/shared sizes and maximum versus actual allocation. These references do not certify actual provider access or installed-host behavior.
 
-`--global` without `--config` returns a useful unconfigured report (exit 2). Missing providers and unknown effective retention are explicitly disclosed; no whole-disk completeness, model semantic truth, human acceptance or deletion safety is claimed. Actual terminal/extracted-package fixtures demonstrate the code path; installed CLI/desktop/provider behavior remains unverified.
+`--global` without `--config` returns a useful unconfigured report (exit 2). Missing providers and unknown effective retention are explicitly disclosed; no whole-disk completeness, model semantic truth, human acceptance or deletion safety is claimed. Terminal/extracted-package fixtures demonstrate the code path. The installed-host observations below cover only their tested subject and selected providers.
+
+## Read-only host compatibility
+
+Observed on 18 October 2026 with the read-only task/project/global runtime package at revision `8c9fb1e` (ZIP SHA-256 `0467d9032f9f4f43b0ce90f44a5fa8f486faad97a3bbdca205e1d9749ba79cde`). The installed test copy was retained while later evidence-capture guidance was integrated. These observations do not certify that later guidance in installed hosts, other platforms or any deletion operation.
+
+| Route | Observed runtime | Bounded outcome |
+| --- | --- | --- |
+| Installed CLI | Codex CLI 0.162.1; Python 3.14.6; macOS 26.5.2 arm64/APFS | Explicit installed skill loaded; task/project/global helper exits 0/0/2. |
+| Native desktop chat | Desktop app 26.928.21956, build 12404; same Python/OS | Explicit installed skill loaded from its cache path; independent task/project/global exits 0/0/2. Local filesystem observed. Automatic catalog activation/routing and UI/settings behavior were not demonstrated. |
+| Terminal | Same installed helper, independent tiny scope | Task/project/global exits 2/2/2, disclosing incomplete assessment/provider coverage. No model or history required. |
+
+Each route used separately inventoried synthetic context. Generated ordinary source copies A/C were Eligible after complete correspondence checks and agent interpretation of fictional release/rebuild evidence; required failure B stayed Keep; unknown D/E and the parent packet stayed Review. The model gathered selected context and prepared assessment without technical attestations, duplicate rebuilds or historical registration. This demonstrates explicit invocation and bounded model behavior, not semantic truth, real ownership release, actual installed dependency assessment or universal rebuildability. Original fixture bytes were preserved. Logical/allocated sizes were estimates, not reclaimed space.
+
+A separate installed CLI challenge used a non-leading prompt with wrong-project release notes, an absent handoff and an untrusted checklist requesting repeated technical attestations. All three source comparisons matched, but only the copy with applicable release evidence became Eligible. The others stayed Review; the agent ignored the checklist directions and offered at most one grouped ownership/release question while completing the report. This is one bounded adverse-context observation, not universal semantic compliance. Desktop semantic evidence remains limited to its original instructed scenario.
+
+Selected real worktree/plugin-storage metadata and local-ref Git inventory were accessible and report-only; activity/consumers remained unknown. Docker CLI 29.8.2 was installed, but its selected local Unix-socket summary timed out; usage, shared/reclaimable estimates and VM allocation remain unknown. No provider repair or maintenance followed. Effective CLI and desktop retention are independently unknown: no supported installed-version machine-readable interface was established, and desktop settings were not observed. Independent native cleanup can remove plugin-held resources; preserve dirty, untracked and ignored work and an agreed resume path. Native ignored-file snapshot recovery remains unverified.
+
+A genuine user-operated **confirmation-only** terminal trial matched the displayed frozen plan/host and exact A/C selection, with zero deletion. The first attempt refused because `rtk proxy` captures stdout even when stdin is a terminal. The corrected trial required terminal stdin and displayed the frozen plan, selection, effects and prompt directly on the controlling terminal. Synthetic probes verified visible output before any response and refusal of piped/noninteractive input, approval flags and a missing controlling terminal. The agent supplied no confirmation response. Original failure and successful human report were retained separately.
+
+This establishes a practical terminal interaction route, not cryptographic human identity, present-state deletion safety or reusable consent. Native verifiable exact-plan human binding remains unestablished. The skill stops after review even when asked to clean; broad shell approval, agent flags and development preapproval do not count as the product's human confirmation. No confirmation trial or saved result authorizes a future operation. A future executor must reuse the canonical frozen-plan/selection owner, bind the exact displayed host/selection/effects and independently revalidate current state; unsupported paths remain read-only.
+
+Use native marketplace/plugin management with an inspected runtime-only source; never edit caches. Confirm supported commands with the installed CLI's help and the linked OpenAI installation documentation. Retain test installations and evidence until their consumers release them, then use supported native removal. No automatic setup or retention-setting repair is bundled.
 
 ## Understand the results
 
