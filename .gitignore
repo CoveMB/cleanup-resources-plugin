@@ -1,0 +1,22 @@
+# Operating-system metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Python bytecode and the repository's local environment
+__pycache__/
+*.py[cod]
+/.venv/
+
+# Generated distribution artifacts
+/build/
+/dist/
+/*.egg-info/
+
+# Root-local environment files; examples must contain placeholders only
+/.env
+/.env.*
+!/.env.example
+
+# Developer-only scratch, local inventories, and probe output
+/.local/
