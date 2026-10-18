@@ -84,6 +84,8 @@ def render_text(report):
              f"Logical examined bytes: {size['logical_bytes']}; Allocated examined bytes: {size['allocated_bytes'] if size['allocated_bytes'] is not None else 'unknown'}",
              f"Unique files: {size['unique_files']}; duplicate hard links: {size['duplicate_hardlinks']}",
              "Filesystem free percent: " + (f"{report['filesystem']['free_percent']:.2f}%" if report['filesystem']['free_percent'] is not None else "unknown")]
+    if "content" in report:
+        lines.append(f"Assessed target bytes read: {report['content']['read_bytes']}; payloads are not recorded")
     if coverage["stop_reason"]:
         lines.append("Stopped: " + coverage["stop_reason"])
     lines.extend(report["warnings"])
@@ -100,6 +102,12 @@ def render_text(report):
         for row in report["git"]["worktrees"]:
             lines.append("Report-only worktree: " + quote(row))
         lines.extend("Git limit: " + item for item in report["git"]["limitations"])
+    for location in report.get("locations", []):
+        lines.append("Coverage: " + quote(location))
+    for inventory in report.get("git_inventories", []):
+        lines.append("Report-only Git inventory: " + quote(inventory))
+    if "retention" in report:
+        lines.append("Independent Codex retention: " + quote(report["retention"]))
     if "plan" in report:
         lines.append("Frozen plan digest: " + report["plan"]["digest"] + "; review data, not authorization")
     lines.extend("Limit: " + limitation for limitation in report["limitations"])

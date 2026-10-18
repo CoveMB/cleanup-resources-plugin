@@ -8,7 +8,8 @@ import time
 
 from .git_inventory import inventory_git
 from .report import new_report
-from .review import descriptor_traversal_available, file_identity, protection, review_task
+from .review import (descriptor_traversal_available, file_identity, protection, review_task,
+                     same_path as _same_path, path_inside as _inside)
 
 
 DOCUMENT_LIMIT = 1024 * 1024
@@ -91,34 +92,6 @@ def _unique_keys(pairs):
             raise ValueError("duplicate JSON field")
         result[key] = value
     return result
-
-
-def _same_path(first, second):
-    if first == second:
-        return True
-    try:
-        return first.samefile(second)
-    except OSError:
-        return False
-
-
-def _inside(path, root):
-    if path == root or root in path.parents:
-        return True
-    # realpath does not normalize case aliases on case-insensitive POSIX filesystems.
-    # Retention, containment and overlap must also recognize the actual directory.
-    try:
-        identity = root.stat()
-    except OSError:
-        return False
-    for ancestor in (path, *path.parents):
-        try:
-            observed = ancestor.stat()
-            if (identity.st_dev, identity.st_ino) == (observed.st_dev, observed.st_ino):
-                return True
-        except OSError:
-            continue
-    return False
 
 
 def _overlap(first, second):
@@ -371,7 +344,12 @@ def validate_manifest(manifest):
 
 
 def review_scope(selected, *, mode="task", assessment=None, manifest=None, holds=(), exclusions=(),
-                 max_entries=2000, max_depth=12, timeout=10.0, max_content_bytes=256 * 1024 * 1024):
+                 max_entries=2000, max_depth=12, timeout=10.0, max_content_bytes=256 * 1024 * 1024, cancelled=None):
+    if mode == "global":
+        from .global_inventory import review_global
+        return review_global(selected, assessment=assessment, manifest=manifest, holds=holds, exclusions=exclusions,
+                             max_entries=max_entries, max_depth=max_depth, timeout=timeout,
+                             max_content_bytes=max_content_bytes, cancelled=cancelled)
     if mode not in {"task", "project"}:
         raise ValueError("unsupported review mode")
     started = time.monotonic()
@@ -383,14 +361,14 @@ def review_scope(selected, *, mode="task", assessment=None, manifest=None, holds
         return max(0.000001, timeout - (time.monotonic() - started))
 
     _validate_assessment(assessment or {"schema_version": 1, "references": {}, "candidates": []})
-    report = review_task(selected, timeout=remaining(), exclusions=exclusions, **limits)
+    report = review_task(selected, timeout=remaining(), exclusions=exclusions, cancelled=cancelled, **limits)
     report["scope"]["mode"] = mode
     report["candidates"] = []
     roots = [Path(report["scope"]["canonical"] or os.path.abspath(selected))]
     report["scope_roots"] = [str(roots[0])]
     report["linked_reviews"] = []
     if mode == "project" and not report["invalid_scope"] and not report["cancelled"]:
-        report["git"] = inventory_git(selected, timeout=remaining())
+        report["git"] = inventory_git(selected, timeout=remaining(), cancelled=cancelled)
         report["cancelled"] = report["git"]["cancelled"]
         if report["cancelled"]:
             report["coverage"]["complete"] = False
@@ -403,7 +381,7 @@ def review_scope(selected, *, mode="task", assessment=None, manifest=None, holds
                     report["coverage"]["complete"] = False
                     report["warnings"].append("Linked metadata entry limit; remaining worktrees unexamined.")
                     break
-                linked = review_task(path, timeout=remaining(), exclusions=exclusions,
+                linked = review_task(path, timeout=remaining(), exclusions=exclusions, cancelled=cancelled,
                                      max_entries=metadata_remaining, max_depth=max_depth)
                 metadata_remaining -= linked["coverage"]["examined"]
                 report["linked_reviews"].append(linked)
@@ -420,6 +398,7 @@ def review_scope(selected, *, mode="task", assessment=None, manifest=None, holds
                   for resource in validate_manifest(manifest)["resources"]} if manifest else {}
     seen = set()
     content_entries_remaining, content_bytes_remaining = max_entries, max_content_bytes
+    content_bytes_read = 0
     for specification in specifications:
         if report["cancelled"]:
             break
@@ -439,9 +418,14 @@ def review_scope(selected, *, mode="task", assessment=None, manifest=None, holds
                 or os.path.ismount(path) or any(_overlap(path, Path(os.path.abspath(value))) for value in (*holds, *exclusions))):
             row.update(assessment="Keep", reason="protected root/ancestor, hold, exclusion or outside selected scope")
             continue
+        if content_bytes_remaining <= 0 or content_entries_remaining <= 0:
+            row.update(assessment="Unavailable", reason="global/candidate content inspection budget exhausted; remaining contents unknown")
+            report["coverage"]["complete"] = False
+            continue
         snapshot = review_task(path, inspect_content=True, max_content_bytes=content_bytes_remaining, timeout=remaining(),
-                               exclusions=exclusions, max_entries=content_entries_remaining, max_depth=max_depth)
+                               exclusions=exclusions, cancelled=cancelled, max_entries=content_entries_remaining, max_depth=max_depth)
         content_entries_remaining -= snapshot["coverage"]["examined"]
+        content_bytes_read += snapshot["content"]["read_bytes"]
         content_bytes_remaining = max(0, content_bytes_remaining - snapshot["content"]["read_bytes"])
         if not snapshot["content"]["complete"]:
             report["coverage"]["complete"] = False
@@ -506,15 +490,24 @@ def review_scope(selected, *, mode="task", assessment=None, manifest=None, holds
             row.update(assessment="Review", reason="overlapping eligible targets; require a narrower plan")
         elif any(other is not row and _evidence_conflict(row, other) for other in eligible):
             row.update(assessment="Review", reason="eligible targets contain another candidate's evidence or rebuild inputs; require a narrower plan")
-    report["limitations"].append("Assessed eligibility includes agent interpretation, not semantic certification by this helper. Frozen review data is not authorization; no apply command exists.")
+    report["content"] = {"read_bytes": content_bytes_read, "examined": max_entries - content_entries_remaining}
+    freeze_review(report, assessment, manifest, holds, exclusions, {**limits, "timeout_seconds": timeout, "max_content_bytes": max_content_bytes})
+    return report
+
+
+def freeze_review(report, assessment, manifest, holds, exclusions, limits):
+    """Freeze the shared review contract; this never grants authorization."""
     report["limitations"][0] = "Discovery is metadata-only; separately assessed candidates include explicit bounded content comparison and agent interpretation."
-    report["limitations"][-2] = "Reports contain metadata/digests, never inspected file payloads; inspect before sharing."
+    report["limitations"] = ["Reports contain metadata/digests, never inspected file payloads; inspect before sharing."
+                             if item.startswith("Reports contain host and selected/relative path metadata;") else item
+                             for item in report["limitations"]]
+    report["limitations"].append("Assessed eligibility includes agent interpretation, not semantic certification by this helper. Frozen review data is not authorization; no apply command exists.")
     plan = {"schema_version": 1, "kind": "frozen-review-not-authorization", "host": report["host"],
             "scope_roots": report["scope_roots"], "candidates": report["candidates"],
             "assessment_digest": digest(assessment), "manifest_digest": digest(manifest),
             "policy": {"holds": [os.path.abspath(value) for value in holds],
                        "exclusions": [os.path.abspath(value) for value in exclusions],
-                       "limits": {**limits, "timeout_seconds": timeout, "max_content_bytes": max_content_bytes}}}
+                       "limits": limits}}
     plan["digest"] = digest(plan)
     report["plan"] = plan
     return report

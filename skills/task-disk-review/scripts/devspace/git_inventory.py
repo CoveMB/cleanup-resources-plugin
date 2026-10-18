@@ -14,6 +14,12 @@ class InspectionUnavailable(Exception):
     """A controlled diagnostic, with no raw Git stderr or file payloads."""
 
 
+class InspectionRefused(InspectionUnavailable):
+    def __init__(self, returncode):
+        super().__init__(f"Read-only command refused inspection (exit {returncode}); state unknown")
+        self.returncode = returncode
+
+
 class GitRefused(InspectionUnavailable):
     def __init__(self, returncode):
         super().__init__(f"Git refused inspection (exit {returncode}); repository/state unknown")
@@ -37,6 +43,20 @@ def _git(executable, directory, arguments, deadline, cancelled):
     command = [executable, "--no-pager", "--no-optional-locks",
                "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
                *arguments]
+    try:
+        return run_readonly(command, directory, environment, deadline, cancelled)
+    except InspectionRefused as error:
+        raise GitRefused(error.returncode) from None
+    except InspectionUnavailable as error:
+        raise type(error)(str(error).replace("Read-only command", "Git")) from None
+
+
+def run_readonly(command, directory, environment, deadline, cancelled=None):
+    """Bound an explicitly constructed read-only command; suppress raw stderr."""
+    if time.monotonic() >= deadline:
+        raise InspectionUnavailable("Read-only command inspection time limit; remaining state unknown")
+    if cancelled is not None and cancelled():
+        raise InspectionCancelled("Read-only command inspection cancelled; remaining state unknown")
     process = None
     try:
         process = subprocess.Popen(command, cwd=directory, env=environment,
@@ -47,26 +67,26 @@ def _git(executable, directory, arguments, deadline, cancelled):
             selector.register(process.stdout, selectors.EVENT_READ)
             while selector.get_map():
                 if time.monotonic() >= deadline:
-                    raise InspectionUnavailable("Git inspection time limit; remaining state unknown")
+                    raise InspectionUnavailable("Read-only command inspection time limit; remaining state unknown")
                 if cancelled is not None and cancelled():
-                    raise InspectionCancelled("Git inspection cancelled; remaining state unknown")
+                    raise InspectionCancelled("Read-only command inspection cancelled; remaining state unknown")
                 for key, _ in selector.select(min(0.05, max(0, deadline - time.monotonic()))):
                     chunk = os.read(key.fd, 65536)
                     if not chunk:
                         selector.unregister(key.fileobj)
                     elif len(output) + len(chunk) > OUTPUT_LIMIT:
-                        raise InspectionUnavailable("Git output limit; truncated state is unknown")
+                        raise InspectionUnavailable("Read-only command output limit; truncated state is unknown")
                     else:
                         output.extend(chunk)
         try:
             returncode = process.wait(timeout=max(0.001, deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
-            raise InspectionUnavailable("Git inspection time limit; remaining state unknown") from None
+            raise InspectionUnavailable("Read-only command inspection time limit; remaining state unknown") from None
         if returncode:
-            raise GitRefused(returncode)
+            raise InspectionRefused(returncode)
         return bytes(output)
     except OSError:
-        raise InspectionUnavailable("Git inspection unavailable on this path/runtime") from None
+        raise InspectionUnavailable("Read-only command inspection unavailable on this path/runtime") from None
     finally:
         if process is not None:
             if process.poll() is None:

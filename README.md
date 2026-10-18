@@ -1,6 +1,6 @@
 # Cleanup Resources Plugin
 
-Read-only task/project disk review through one Codex skill and a standalone Python helper. Reviews can produce assessed frozen plans. **No apply, approval-execution or deletion command exists.** Global inventory is not supported.
+Read-only task/project/global development disk review through one Codex skill and a standalone Python helper. Reviews can produce assessed frozen plans. **No apply, approval-execution or deletion command exists.**
 
 ## Run a review
 
@@ -16,6 +16,40 @@ python3 skills/task-disk-review/scripts/devspace.py review --project "/path/to/p
 Without assessment/context inputs, the terminal helper still reports observations and unknowns. It needs no model, account, chat history or package manager. The packaged `task-disk-review` skill uses the same helper and can gather selected contextual evidence. Follow [OpenAI's installation documentation](https://developers.openai.com/plugins/build/plugins). No installer, hook, settings change or background process is bundled. Actual installed CLI/desktop invocation remains unverified.
 
 Task mode stays within its selected directory. Project mode supports non-Git projects and inventories Git-discovered linked worktrees when the selected project is itself a worktree root. Nested selections do not expand into their parent repository. Worktrees/branches remain report-only. Status includes staged, dirty, untracked, ignored, locked, detached and locally unpushed states; missing upstream/activity stays unknown. No fetch occurs. Git status inspection refuses configured clean/process filters because even status can execute them, including unused global LFS filters. Submodule contents and collapsed ignored-directory contents are not inspected by Git inventory.
+
+## Global coverage and provider storage
+
+```sh
+python3 skills/task-disk-review/scripts/devspace.py review --global --config "/selected/global-config.json" --json
+```
+
+Select a small JSON file, prepared by the agent when using the skill. All paths are absolute; no default home/whole-disk scan or package-manager installation. Example placeholders:
+
+```json
+{
+  "schema_version": 1,
+  "roots": ["/selected/development"],
+  "holds": ["/selected/development/retained-output"],
+  "exclusions": ["/selected/development/unrelated"],
+  "codex_worktrees": ["/selected/managed-worktrees"],
+  "package_storage": ["/selected/package-store"],
+  "docker_host": "unix:///selected/docker.sock"
+}
+```
+
+Only `schema_version` is required; omitted lists/providers are explicitly unconfigured, never inferred empty or successfully inspected. Lists accept at most 32 paths each; inputs retain the 1 MiB document bound. Optional `host_identity` binds configuration to the report's hashed execution-host identity; mismatch skips filesystem/provider probes. This is a locality safeguard, not authenticity. Relative global assessment paths are rejected; use exact absolute paths with the existing assessment contract.
+
+Global reuses the task/project assessment and frozen-plan owner. It protects every configured development root, Git-discovered worktree root and selected provider storage path, including skipped/unavailable locations. Provider paths/ancestors are held/excluded from development assessment. Plan/manifest output must stay outside these scopes. For task/project reviews, pass known provider-managed paths through `--hold` and `--exclude`; storage names and arbitrary custom provider paths cannot all be recognized automatically.
+
+Coverage locations distinguish examined, skipped, inaccessible, unavailable and unconfigured. “Examined” may still have partial metadata coverage; inspect its coverage field. One deadline and entry/content budgets bound global work; cancellation stops later locations. Nested/alias roots are skipped, and physical hardlinks across disjoint development roots count once. Host file totals cover examined development-root files; provider storage sizes remain separate, with overlapping provider roots skipped. Unknown bytes stay unknown. Selected network/sync/unsupported filesystems may yield read-only metadata, never executable eligibility; known synchronization boundaries are detected, but a local-filesystem observation does not prove absence of sync or consumers.
+
+Codex-worktree and package-storage integrations inspect only selected metadata paths, without reading settings databases, transcripts or credentials. Package locations must come from relevant existing configuration/known storage; the helper runs no package-manager commands. Use the owning tool's documented maintenance after separately reviewing its effect, never a global prune inferred from this report. Git roots discovered in configured development/Codex locations use the existing finite status inventory, with no fetch; linked worktrees outside configured roots are inventoried by Git but not recursively scanned. Clean/stale/archived state never establishes release. Accepted handoff must retain required dirty/untracked/ignored state and an agreed resume path; tracked commits alone are insufficient.
+
+Docker is optional: only the installed CLI's `--host unix:///... system df --format '{{json .}}'` summary is queried. Inherited Docker context/host/TLS overrides are stripped; explicit non-Unix endpoints are refused before any request. No context/account/credential probe, daemon start, install, mutation, prune or VM access. A local socket can proxy a daemon/VM elsewhere, so its usage is not execution-host allocation. Shared layers and native reclaimable labels are provider estimates; neither is summed into host file totals. Docker VM maximum and actual host allocation remain unknown. A supported summary includes all four categories: images, containers, local volumes and build cache. Missing categories remain unavailable, never zero. Unsupported format/version, refusal, timeout or unavailable CLI yields partial coverage with no fallback.
+
+Effective Codex CLI and desktop automatic-retention settings are **independently unknown**: no supported installed-version machine-readable interface is established here. No default count, inferred disabled setting or guarantee of ignored-file snapshot recovery is reported. Independent Codex cleanup may remove worktrees the plugin recommends retaining; plugin holds cannot control it. Consult installed settings and verify actual behavior during host certification. Current official [worktree documentation](https://learn.chatgpt.com/docs/environments/git-worktrees) describes handoff/restore and independent cleanup; it does not establish this host's effective configuration. [Docker usage](https://docs.docker.com/reference/cli/docker/system/df/) and [Desktop storage](https://docs.docker.com/desktop/troubleshoot-and-support/faqs/macfaqs/) explain summary/shared sizes and maximum versus actual allocation. These references do not certify actual provider access or installed-host behavior.
+
+`--global` without `--config` returns a useful unconfigured report (exit 2). Missing providers and unknown effective retention are explicitly disclosed; no whole-disk completeness, model semantic truth, human acceptance or deletion safety is claimed. Actual terminal/extracted-package fixtures demonstrate the code path; real CLI/desktop/provider certification remains I4.
 
 ## Understand the results
 
@@ -62,7 +96,7 @@ If useful, the skill asks at most one grouped ownership/purpose/release/loss que
 
 ## Bounds, settings and persistence
 
-Defaults: 2,000 entries per metadata/content phase, depth 12, a cooperative 10-second overall budget, and 256 MiB total content reads across explicitly assessed candidates. Metadata comes first; only selected candidates are reread for content. Flags `--max-entries`, `--max-depth`, `--timeout`, `--max-content-bytes`, repeated `--hold PATH` and `--exclude PATH` adjust the selected review. Exclusions prevent traversal and eligibility; holds protect ancestors/descendants from selection. Denied/skipped/limited coverage is unknown usage, never zero.
+Defaults: 2,000 entries per metadata/content phase, depth 12, a cooperative 10-second overall budget, and 256 MiB total content reads across explicitly assessed candidates. Metadata comes first; only selected candidates are reread for content. Reports disclose actual target bytes read separately from deduplicated size. One extra byte detects an over-budget candidate; exhaustion stops further candidate payload reads. Flags `--max-entries`, `--max-depth`, `--timeout`, `--max-content-bytes`, repeated `--hold PATH` and `--exclude PATH` adjust the selected review. Exclusions prevent traversal and eligibility; holds protect ancestors/descendants from selection. Denied/skipped/limited coverage is unknown usage, never zero.
 
 Assessment/plan documents and each selected reference are limited to 1 MiB; at most 64 explicitly assessed candidates and 128 reference IDs are accepted. A larger source file requires a different adequate inventory/evidence path or remains Review; the helper does not silently sample it.
 

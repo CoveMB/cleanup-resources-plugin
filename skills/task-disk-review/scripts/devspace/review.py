@@ -29,6 +29,35 @@ def protection(name, inherited=False):
     return None, False
 
 
+def same_path(first, second):
+    if first == second:
+        return True
+    try:
+        return first.samefile(second)
+    except OSError:
+        return False
+
+
+def path_inside(path, root):
+    if path == root or root in path.parents:
+        return True
+    # realpath does not normalize case aliases on case-insensitive POSIX filesystems.
+    # Retention, containment and overlap must also recognize the actual directory.
+    try:
+        identity = root.stat()
+    except OSError:
+        return False
+    for ancestor in (path, *path.parents):
+        try:
+            observed = ancestor.stat()
+            if (identity.st_dev, identity.st_ino) == (observed.st_dev, observed.st_ino):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+
 def descriptor_traversal_available():
     return (sys.platform in {"darwin", "linux"} and hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY")
             and os.open in os.supports_dir_fd and os.scandir in os.supports_fd)
@@ -154,6 +183,12 @@ def review_task(selected, *, max_entries=2000, max_depth=12, timeout=10.0, cance
                 except OSError as error:
                     unavailable(row["path"], "metadata unavailable: " + error_code(error), row)
                     continue
+                # Physical aliases must also exclude contents; never dereference
+                # a link entry to establish that match.
+                if not stat.S_ISLNK(metadata.st_mode) and any(path_inside(full_path, root) for root in excluded):
+                    row.update(assessment="Keep")
+                    skip(row, "excluded filesystem alias; contents not enumerated")
+                    continue
                 reason, private_directory = protection(entry.name, inherited_keep)
                 if reason:
                     row.update(assessment="Keep", reason=reason)
@@ -193,6 +228,7 @@ def review_task(selected, *, max_entries=2000, max_depth=12, timeout=10.0, cance
                     row.update(kind="file", logical_bytes=metadata.st_size,
                                allocated_bytes=metadata.st_blocks * 512 if hasattr(metadata, "st_blocks") else None)
                     identity = (metadata.st_dev, metadata.st_ino)
+                    row["accounting_identity"] = list(identity)
                     if metadata.st_ino and identity in seen_files:
                         size["duplicate_hardlinks"] += 1
                         row["counted"] = False
@@ -259,7 +295,7 @@ def review_task(selected, *, max_entries=2000, max_depth=12, timeout=10.0, cance
             return report
         canonical = Path(selected).resolve(strict=True)
         report["scope"]["canonical"] = str(canonical)
-        if any(canonical == root or root in canonical.parents for root in excluded):
+        if any(path_inside(canonical, root) for root in excluded):
             report["entries"].append({"path": ".", "kind": "directory", "assessment": "Keep", "coverage": "skipped", "reason": "excluded scope"})
             partial()
             coverage["skipped"] += 1
@@ -300,10 +336,10 @@ def review_task(selected, *, max_entries=2000, max_depth=12, timeout=10.0, cance
             return report
         root_device = opened.st_dev
         root_mount = mount_identity(descriptor)
+        report["filesystem_local"] = local_filesystem(descriptor) and not any(
+            part.lower() in {"cloudstorage", "mobile documents", "onedrive", "dropbox"} for part in canonical.parts)
         if inspect_content:
             report["identity"] = file_identity(opened)
-            report["filesystem_local"] = local_filesystem(descriptor) and not any(
-                part.lower() in {"cloudstorage", "mobile documents", "onedrive", "dropbox"} for part in canonical.parts)
             if not report["filesystem_local"]:
                 unavailable(".", "nonlocal/synchronized/unsupported filesystem boundary; contents not read")
                 return report

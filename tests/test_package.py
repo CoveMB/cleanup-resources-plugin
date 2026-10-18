@@ -52,6 +52,20 @@ class PackageInvocation(unittest.TestCase):
             self.assertEqual(saved["kind"], "frozen-review-not-authorization")
             self.assertEqual((task / "artifact").read_bytes(), b"12345")
 
+            config = base / "global-config.json"
+            config.write_text(json.dumps({"schema_version": 1, "roots": [str(task)]}))
+            global_review = subprocess.run([sys.executable, "-B", str(base / "installed/skills/task-disk-review/scripts/devspace.py"),
+                                           "review", "--global", "--config", str(config), "--json"],
+                                          cwd=base, text=True, capture_output=True, timeout=15)
+            self.assertEqual(global_review.returncode, 2, global_review.stderr)
+            self.assertEqual(global_review.stderr, "")
+            report = json.loads(global_review.stdout)
+            self.assertEqual(report["scope"]["mode"], "global")
+            self.assertEqual(report["size"]["logical_bytes"], 5)
+            self.assertEqual(report["coverage"]["unconfigured"], 3)
+            self.assertIsNone(report["retention"]["desktop"]["effective"])
+            self.assertEqual((task / "artifact").read_bytes(), b"12345")
+
 
 if __name__ == "__main__":
     unittest.main()
