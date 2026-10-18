@@ -1,4 +1,4 @@
-# Cleanup plugin
+# Cleanup Resources Plugin
 
 Read-only disk usage review of **one selected task directory**, through one Codex skill or a standalone Python helper. I1 is implemented; assessed plans, project/global inventory, installed-host certification and cleanup remain future work. No deletion/apply command exists.
 
@@ -35,7 +35,7 @@ Exit codes: 0 complete metadata traversal; 2 partial coverage; 1 invalid/unavail
 
 ```sh
 python3 -B -m unittest discover -s tests -v
-python3 -B scripts/build_package.py /path/to/new-cleanup-plugin.zip
+python3 -B scripts/build_package.py /path/to/new-cleanup-resources-plugin.zip
 ```
 
 Tests create explicitly disposable temporary fixtures: nested task/sibling files, protected state and failure evidence, denied directories, links, hardlinks, sparse files and extracted packages. Only those test-owned temporary roots are removed. Mount/unsupported-host failure cases are simulated; no real mounts or user resources are altered.
