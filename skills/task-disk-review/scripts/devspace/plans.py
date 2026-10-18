@@ -134,6 +134,12 @@ def _entries(snapshot):
     return sorted(entries, key=lambda row: row["path"])
 
 
+def tree_identity_digest(snapshot):
+    """Bind descendant replacements independently of equivalent content/mode."""
+    return digest(sorted(({"path": entry["path"], "identity": entry["identity"]}
+                          for entry in snapshot["entries"] if "identity" in entry), key=lambda entry: entry["path"]))
+
+
 def _expected_entries(entries):
     if not isinstance(entries, list) or len(entries) > 100000:
         raise ValueError("unsupported expected inventory")
@@ -436,6 +442,7 @@ def review_scope(selected, *, mode="task", assessment=None, manifest=None, holds
         actual_entries = _entries(snapshot)
         row["observation"] = {"complete": snapshot.get("content", {}).get("complete", False),
                               "identity": snapshot.get("identity"), "tree_digest": digest(actual_entries),
+                              "tree_identity_digest": tree_identity_digest(snapshot),
                               "file_count": sum(entry["kind"] == "file" for entry in actual_entries),
                               "filesystem_local": snapshot.get("filesystem_local", False),
                               "size": snapshot["size"], "coverage": snapshot["coverage"]}
@@ -506,13 +513,21 @@ def freeze_review(report, assessment, manifest, holds, exclusions, limits):
     report["limitations"] = ["Reports contain metadata/digests, never inspected file payloads; inspect before sharing."
                              if item.startswith("Reports contain host and selected/relative path metadata;") else item
                              for item in report["limitations"]]
-    report["limitations"].append("Assessed eligibility includes agent interpretation, not semantic certification by this helper. Frozen review data is not authorization; no apply command exists.")
+    report["limitations"].append("Assessed eligibility includes agent interpretation, not semantic certification by this helper. Frozen review data is not authorization; apply requires fresh interactive confirmation and revalidation.")
     plan = {"schema_version": 1, "kind": "frozen-review-not-authorization", "host": report["host"],
             "scope_roots": report["scope_roots"], "candidates": report["candidates"],
             "assessment_digest": digest(assessment), "manifest_digest": digest(manifest),
             "policy": {"holds": [os.path.abspath(value) for value in holds],
                        "exclusions": [os.path.abspath(value) for value in exclusions],
                        "limits": limits}}
+    plan["review_context"] = {"mode": report["scope"]["mode"], "selected": report["scope"]["selected"]}
+    plan["scope_identities"] = {}
+    for root in plan["scope_roots"]:
+        try:
+            metadata = os.lstat(root)
+            plan["scope_identities"][root] = {key: file_identity(metadata)[key] for key in ("device", "inode", "mode")}
+        except OSError:
+            plan["scope_identities"][root] = None
     plan["digest"] = digest(plan)
     report["plan"] = plan
     return report
@@ -547,6 +562,12 @@ def validate_selection(plan, selected_ids, *, host=None):
         if any(_evidence_conflict(row, other) for other in selected):
             raise ValueError("selected target contains another selection's evidence or rebuild inputs")
         selected.append(row)
+    # Evidence/rebuild inputs for an earlier item must survive later selections.
+    # Per-item reassessment alone would drop already processed obligations.
+    for row in selected:
+        if any(_inside(Path(reference["path"]), Path(target["path"]))
+               for reference in row.get("references", {}).values() for target in selected):
+            raise ValueError("selected batch contains required evidence/rebuild inputs")
     return selected
 
 

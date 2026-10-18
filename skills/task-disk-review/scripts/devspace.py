@@ -37,7 +37,7 @@ def main():
     if sys.version_info < (3, 12):
         print("Python 3.12 or later is required.", file=sys.stderr)
         return 1
-    parser = argparse.ArgumentParser(description="Read-only task/project/global inventory and assessed frozen review plans.")
+    parser = argparse.ArgumentParser(description="Task/project/global review and separately confirmed exact local directory cleanup.")
     commands = parser.add_subparsers(dest="command", required=True)
     review = commands.add_parser("review", help="review a selected task; never deletes")
     scope = review.add_mutually_exclusive_group(required=True)
@@ -58,7 +58,37 @@ def main():
     review.add_argument("--max-content-bytes", type=integer_in_range(1, 2**40), default=256 * 1024 * 1024)
     review.add_argument("--evidence-warn-bytes", type=integer_in_range(1, 2**40), default=EVIDENCE_WARN_BYTES, help="advisory logical packet size; strictly above warns")
     review.add_argument("--evidence-explain-bytes", type=integer_in_range(1, 2**40), default=EVIDENCE_EXPLAIN_BYTES, help="strictly above requests contextual explanation; never eligibility")
+    apply = commands.add_parser("apply", help="user's own terminal only; permanent exact-directory removal")
+    apply.add_argument("--plan", required=True)
+    apply.add_argument("--assessment", help="original agent-prepared assessment; not approval")
+    apply.add_argument("--manifest", help="original historical manifest, if supplied during review")
+    apply.add_argument("--config", help="original global configuration, if applicable")
+    selection = apply.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--select", help="comma-separated exact eligible IDs")
+    selection.add_argument("--all-eligible", action="store_true")
+    selection.add_argument("--cancel", action="store_true")
+    reconcile = commands.add_parser("reconcile", help="inspect interrupted operation; never retries deletion")
+    reconcile.add_argument("--plan", required=True)
     arguments = parser.parse_args()
+    if arguments.command != "review":
+        from devspace import cleanup
+        try:
+            if arguments.command == "reconcile":
+                result = cleanup.reconcile(arguments.plan)
+            elif arguments.cancel:
+                result = {"schema_version": 1, "outcome": "cancelled", "targets": []}
+            else:
+                if not arguments.assessment:
+                    raise ValueError("original assessment required")
+                result = cleanup.apply(arguments.plan, arguments.assessment,
+                                       arguments.select.split(",") if arguments.select else [],
+                                       all_eligible=arguments.all_eligible, manifest_path=arguments.manifest,
+                                       config_path=arguments.config)
+        except (ValueError, OSError, KeyError, TypeError, RecursionError, KeyboardInterrupt):
+            print("Cleanup refused or interrupted; no automatic retry. Preserve state and reconcile any pending operation using its original plan.", file=sys.stderr)
+            return 1
+        print(json.dumps(result, ensure_ascii=True, indent=2))
+        return 0 if result["outcome"] in {"completed", "cancelled", "reconciled-no-retry"} else 1
     try:
         assessment = read_document(arguments.assessment) if arguments.assessment else None
         manifest = read_document(arguments.manifest) if arguments.manifest else None

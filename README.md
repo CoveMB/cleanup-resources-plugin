@@ -1,6 +1,6 @@
 # Cleanup Resources Plugin
 
-Read-only task/project/global development disk review through one Codex skill and a standalone Python helper. Reviews can produce assessed frozen plans. **No apply, approval-execution or deletion command exists.** Bounded installed-host observations and their limits are recorded below.
+Task/project/global development disk review through one Codex skill and a standalone Python helper. Reviews produce assessed frozen plans. The helper also supports separately confirmed permanent removal of exact eligible directories on tested local macOS/APFS capabilities. The agent stops after review; the user operates cleanup in their own terminal. Installed combined cleanup and a new human pilot remain unverified.
 
 ## Run a review
 
@@ -69,7 +69,7 @@ Selected real worktree/plugin-storage metadata and local-ref Git inventory were 
 
 A genuine user-operated **confirmation-only** terminal trial matched the displayed frozen plan/host and exact A/C selection, with zero deletion. The first attempt refused because `rtk proxy` captures stdout even when stdin is a terminal. The corrected trial required terminal stdin and displayed the frozen plan, selection, effects and prompt directly on the controlling terminal. Synthetic probes verified visible output before any response and refusal of piped/noninteractive input, approval flags and a missing controlling terminal. The agent supplied no confirmation response. Original failure and successful human report were retained separately.
 
-This establishes a practical terminal interaction route, not cryptographic human identity, present-state deletion safety or reusable consent. Native verifiable exact-plan human binding remains unestablished. The skill stops after review even when asked to clean; broad shell approval, agent flags and development preapproval do not count as the product's human confirmation. No confirmation trial or saved result authorizes a future operation. A future executor must reuse the canonical frozen-plan/selection owner, bind the exact displayed host/selection/effects and independently revalidate current state; unsupported paths remain read-only.
+This establishes a practical terminal interaction route, not cryptographic human identity, present-state deletion safety or reusable consent. Native verifiable exact-plan human binding remains unestablished. The skill stops after review even when asked to clean; broad shell approval, agent flags and development preapproval do not count as the product's human confirmation. No confirmation trial or saved result authorizes a future operation. The apply helper described below reuses the canonical frozen-plan/selection owner and independently revalidates current state; unsupported paths remain read-only.
 
 Use native marketplace/plugin management with an inspected runtime-only source; never edit caches. Confirm supported commands with the installed CLI's help and the linked OpenAI installation documentation. Retain test installations and evidence until their consumers release them, then use supported native removal. No automatic setup or retention-setting repair is bundled.
 
@@ -88,7 +88,43 @@ Source examples: A rebuildable output and C ordinary nested dependencies can qua
 
 Common credentials/`.env`, databases, `.wrangler`, history, required originals, unique/modified/offline dependencies and unresolved consumers cannot be overridden by accepted loss or release statements. Protected state payloads are not read. Generic evidence is initially Keep; an explicitly assessed disposable nested output can qualify while required originals remain protected. Custom sensitive state may be unrecognized and must be preserved by assessment.
 
-Frozen plans bind host identity, exact target/contents, evidence/assessment digests, effects, holds/exclusions and preconditions. Candidates containing another eligible candidate’s checked evidence or rebuild inputs stay Review; narrow the plan to preserve those references. Keep the assessment and referenced sources for later revalidation. Plans contain compact metadata/digests, not inspected payloads or bulk content inventories. Material changes require a new plan. A future executor must reuse this owner and revalidate actual state; data validation alone cannot authorize removal. Separate exact-plan human confirmation remains mandatory. No automatic backup or universal undo is promised.
+Frozen plans bind host identity, exact target/contents, a separate descendant-identity digest, evidence/assessment digests, effects, holds/exclusions, review scope identities and preconditions. Candidates containing another eligible candidate’s checked evidence or rebuild inputs stay Review; narrow the plan to preserve those references. Keep the original assessment, optional manifest/configuration and referenced sources outside every selected target for revalidation and recovery. A batch that contains another selected item's required evidence or rebuild input refuses before mutation. Plans contain compact metadata/digests, not inspected payloads or bulk content inventories. Material changes require a new plan, including identical-content nested replacements or changed shared-file identities. Earlier review plans remain readable review data but must be regenerated for apply. Data validation alone cannot authorize removal. Separate exact-plan human confirmation remains mandatory. No automatic backup or universal undo is promised.
+
+## Exact-directory cleanup in your terminal
+
+After reviewing the agent-prepared plan, run the resolved helper yourself with the original inputs. Replace the example IDs with the displayed eligible IDs:
+
+```sh
+python3 skills/task-disk-review/scripts/devspace.py apply --plan "/outside/review-plan.json" \
+  --assessment "/outside/assessment.json" --select ID_A,ID_C
+python3 skills/task-disk-review/scripts/devspace.py apply --plan "/outside/review-plan.json" \
+  --assessment "/outside/assessment.json" --all-eligible
+python3 skills/task-disk-review/scripts/devspace.py apply --plan "/outside/review-plan.json" --cancel
+```
+
+Supply the original `--manifest FILE` when review used one, and original `--config FILE` for global review. Selection never promotes Keep/Review/Unavailable rows or adds newly discovered resources. All-eligible means only the eligible rows in that frozen plan. Empty, duplicate, unknown, overlapping, changed or protected selections refuse. Cancellation removes nothing.
+
+Apply requires terminal stdin and a controlling terminal. It displays the exact plan digest, host, IDs, paths, observations, permanent effects, preconditions, policy and warnings directly through `/dev/tty`, including when a wrapper captures stdout. Inspect these and type the displayed `REMOVE` response exactly, or cancel. There is no approval flag, input-file confirmation, saved-consent replay or automatic agent execution. Terminal interaction does not authenticate human identity or defend against a same-user program driving a terminal.
+
+The supported mutation route is local APFS on macOS with no-follow descriptor traversal, effective-user permission checks, advisory locking and durable-file capabilities. HFS, Linux, Windows, network/synchronized/unknown filesystems and unavailable capabilities remain read-only. Runtime capability refusal means zero initial mutation; changed capabilities during removal stop later actions. Do not move fixtures to an untested filesystem to bypass refusal. No real mount operation has been certified. Known mount boundaries are refused; actual alternate mount combinations remain unsupported.
+
+Home/project/worktree/configured roots, mount/provider roots and their protected ancestors are never generic cleanup targets. Holds/exclusions and nested credentials, databases, original failures or other protected contents block selection. Known provider storage must be included in the selected policy; arbitrary custom storage cannot be recognized from its name. Canonical reassessment rereads the original content/use/release/retention/rebuild inputs before the whole batch, after confirmation and immediately before each remaining item. Missing or changed inputs require a new review. It cannot discover an unrecorded external consumer or certify the truth of source prose.
+
+The helper locks cooperating instances in the current OS account at the fixed private state location `~/Library/Application Support/cleanup-resources-plugin`, using the account database home rather than an environment override. Its parent must already exist. State must be locally supported, owned by that account and mode 0700; records/lock are mode 0600. No alternate state/lock flag exists. State stays outside all reviewed targets and roots. Write or durability refusal prevents deletion. The helper writes a compact intent with file and directory synchronization, including Darwin `F_FULLFSYNC`, before mutation, then a result. Receipts contain hashed host identity, IDs, original resource identities, fixed operation/warnings, outcomes and measurements; no target paths, assessment prose, file payloads, transcripts or bulk listings. Keep the original plan separately for reconciliation.
+
+Descriptor-relative operations reject observed links, mounts, changed child sets, identities and contents, and recheck the root path before every removal. Permission checks preflight the entire selected batch. The account-local advisory lock cannot control editors, builds or unrelated agents. Identity checks and unlink are separate operations: concurrent same-user changes can still race between them. This reduces accidental loss; it is not an atomic filesystem transaction or a security boundary. Stop known writers first through their normal owner workflow; the helper never stops processes.
+
+Any drift, failure or interruption stops remaining items. A result can report `started-outcome-unknown` for a partially changed target; it never claims rollback. An interrupted or failed operation leaves pending intent and blocks another apply. Inspect it explicitly:
+
+```sh
+python3 skills/task-disk-review/scripts/devspace.py reconcile --plan "/outside/original-review-plan.json"
+```
+
+Reconcile only observes absent, replaced, same-identity-with-unverified-contents or unknown targets. It writes a fresh observation record, clears the pending marker after that record is durable, and never retries deletion. A same identity can contain partially deleted contents. A missing ancestor leaves the target unknown. Replacement resources survive. Corrupted/unavailable state refuses reconciliation: preserve records and inspect the failure; there is no force/clear-state fallback. Retain original failures and receipts until their consumers release them. After reconciliation, prepare a new review and obtain fresh exact-plan confirmation for any further cleanup.
+
+Permanent removal has no Trash, quarantine, backup, force/shell fallback or universal undo. Recovery is only the previously established ordinary rebuild or explicitly accepted loss. Reported logical and allocated sizes are estimates. Before/after available free bytes and their signed net difference are filesystem observations; snapshots, clones, hardlinks, open files and other activity prevent exact target attribution or guaranteed savings. Result-write failure returns failure with the pending intent retained; preserve state and reconcile rather than blindly repeating apply.
+
+Apply/reconcile return 0 for completed/cancelled or reconciled-without-retry outcomes, 1 for refusal, interruption, partial failure or unavailable result, and parser errors use 2. Inspect outcome fields rather than treating an exit code as permission. Component tests use only inventoried agent-created disposable directories and synthetic terminal responses. They do not establish genuine new human acceptance, installed CLI/desktop combined behavior, meaningful real-user savings, or support beyond the tested capabilities.
 
 ## Evidence input
 

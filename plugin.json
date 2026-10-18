@@ -2,12 +2,12 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "cleanup-resources-plugin",
   "version": "0.1.0",
-  "description": "Read-only disk usage review for one selected task directory.",
+  "description": "Task/project/global disk review and a human-operated exact-directory cleanup helper.",
   "extensions": {
     "com.openai": {
       "interface": {
         "displayName": "Cleanup Resources Plugin",
-        "shortDescription": "Review disk usage in one selected task directory.",
+        "shortDescription": "Review development disk usage and cleanup selections.",
         "capabilities": [
           "Read"
         ]

@@ -80,6 +80,19 @@ def file_identity(metadata):
             "size": metadata.st_size, "mtime_ns": metadata.st_mtime_ns, "ctime_ns": metadata.st_ctime_ns}
 
 
+def darwin_filesystem(descriptor):
+    """Kernel flags/type for an open Darwin descriptor, shared by read/apply gates."""
+    library = ctypes.CDLL(None)
+    function = getattr(library, "fstatfs64", None) or getattr(library, "fstatfs$INODE64", None) or library.fstatfs
+    function.argtypes = [ctypes.c_int, ctypes.c_void_p]
+    function.restype = ctypes.c_int
+    buffer = ctypes.create_string_buffer(4096)
+    if function(descriptor, buffer) != 0:
+        raise OSError(errno.ENOTSUP, "filesystem capability unavailable")
+    # Darwin statfs64 prefix, verified against SDK sys/mount.h.
+    return ctypes.c_uint32.from_buffer(buffer, 64).value, buffer.raw[72:88].split(b"\0", 1)[0]
+
+
 def local_filesystem(descriptor):
     """Selected descriptor's kernel mount fact, never a sync/activity certificate."""
     try:
@@ -92,17 +105,7 @@ def local_filesystem(descriptor):
                         return fields[fields.index("-") + 1] in {"ext2", "ext3", "ext4", "xfs", "btrfs", "tmpfs", "overlay", "zfs"}
             return False
         if sys.platform == "darwin":
-            library = ctypes.CDLL(None)
-            function = getattr(library, "fstatfs64", None) or getattr(library, "fstatfs$INODE64", None) or library.fstatfs
-            function.argtypes = [ctypes.c_int, ctypes.c_void_p]
-            function.restype = ctypes.c_int
-            buffer = ctypes.create_string_buffer(4096)
-            if function(descriptor, buffer) != 0:
-                return False
-            # Darwin statfs64 prefix, verified against SDK sys/mount.h:
-            # flags at byte 64, filesystem type name at byte 72 (16 bytes).
-            flags = ctypes.c_uint32.from_buffer(buffer, 64).value
-            name = buffer.raw[72:88].split(b"\0", 1)[0]
+            flags, name = darwin_filesystem(descriptor)
             return bool(flags & 0x1000) and name in {b"apfs", b"hfs"}
     except (OSError, AttributeError, ValueError, IndexError):
         pass
