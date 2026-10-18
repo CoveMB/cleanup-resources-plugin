@@ -1,0 +1,3 @@
+interface:
+  display_name: "Task Disk Review"
+  short_description: "Review one task directory's disk usage safely"
