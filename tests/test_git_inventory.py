@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -31,6 +32,18 @@ class GitInventory(unittest.TestCase):
         self.environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
                                 GIT_AUTHOR_NAME="Fixture", GIT_AUTHOR_EMAIL="fixture@example.invalid",
                                 GIT_COMMITTER_NAME="Fixture", GIT_COMMITTER_EMAIL="fixture@example.invalid")
+        # The product deliberately drops inherited GIT_* overrides. Isolate the
+        # real Git child at its executable boundary, without changing host config
+        # or masking repository-local filter behavior under test.
+        executable = shutil.which("git")
+        self.assertIsNotNone(executable)
+        wrapper = self.fixture / "fixture-git"
+        wrapper.write_text("#!/bin/sh\nGIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null exec "
+                           + shlex.quote(executable) + ' "$@"\n')
+        wrapper.chmod(0o700)
+        discovery = patch("devspace.git_inventory.shutil.which", return_value=str(wrapper))
+        discovery.start()
+        self.addCleanup(discovery.stop)
         self.git("init", "--initial-branch=fixture-main")
         (self.project / ".gitignore").write_text(".env\nignored/\n")
         for name in ("staged.txt", "dirty.txt", "rename-before.txt"):
