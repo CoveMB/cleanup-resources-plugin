@@ -1,5 +1,7 @@
-"""Bounded metadata traversal; never opens a regular file or follows a link."""
+"""Bounded no-follow traversal; content reads require an explicit assessment."""
 import errno
+import ctypes
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -44,13 +46,54 @@ def mount_identity(descriptor):
     return os.fstat(descriptor).st_dev
 
 
-def review_task(selected, *, max_entries=2000, max_depth=12, timeout=10.0, cancelled=None):
+def file_identity(metadata):
+    return {"device": metadata.st_dev, "inode": metadata.st_ino, "mode": metadata.st_mode,
+            "size": metadata.st_size, "mtime_ns": metadata.st_mtime_ns, "ctime_ns": metadata.st_ctime_ns}
+
+
+def local_filesystem(descriptor):
+    """Selected descriptor's kernel mount fact, never a sync/activity certificate."""
+    try:
+        if sys.platform == "linux":
+            identifier = str(mount_identity(descriptor))
+            with open("/proc/self/mountinfo", encoding="utf-8") as stream:
+                for line in stream:
+                    fields = line.split()
+                    if fields[0] == identifier:
+                        return fields[fields.index("-") + 1] in {"ext2", "ext3", "ext4", "xfs", "btrfs", "tmpfs", "overlay", "zfs"}
+            return False
+        if sys.platform == "darwin":
+            library = ctypes.CDLL(None)
+            function = getattr(library, "fstatfs64", None) or getattr(library, "fstatfs$INODE64", None) or library.fstatfs
+            function.argtypes = [ctypes.c_int, ctypes.c_void_p]
+            function.restype = ctypes.c_int
+            buffer = ctypes.create_string_buffer(4096)
+            if function(descriptor, buffer) != 0:
+                return False
+            # Darwin statfs64 prefix, verified against SDK sys/mount.h:
+            # flags at byte 64, filesystem type name at byte 72 (16 bytes).
+            flags = ctypes.c_uint32.from_buffer(buffer, 64).value
+            name = buffer.raw[72:88].split(b"\0", 1)[0]
+            return bool(flags & 0x1000) and name in {b"apfs", b"hfs"}
+    except (OSError, AttributeError, ValueError, IndexError):
+        pass
+    return False
+
+
+def review_task(selected, *, max_entries=2000, max_depth=12, timeout=10.0, cancelled=None,
+                inspect_content=False, max_content_bytes=256 * 1024 * 1024, exclusions=()):
     selected = os.path.abspath(os.fspath(selected))
     report = new_report(selected, None, {"max_entries": max_entries, "max_depth": max_depth, "timeout_seconds": timeout})
     coverage, size = report["coverage"], report["size"]
     seen_files = set()
     started = time.monotonic()
     stopped = False
+    excluded = [Path(os.path.abspath(value)) for value in exclusions]
+    content_bytes = 0
+    if inspect_content:
+        report["content"] = {"complete": False, "read_bytes": 0}
+        report["limitations"][0] = "Explicit candidate content reads/hash comparisons do not establish semantic value, rebuildability or current use."
+        report["limitations"][-1] = "Reports contain metadata/digests, never file payloads; inspect before sharing."
 
     def partial():
         coverage["complete"] = False
@@ -85,7 +128,8 @@ def review_task(selected, *, max_entries=2000, max_depth=12, timeout=10.0, cance
         row.update(coverage="skipped", reason=reason)
 
     def walk(descriptor, relative, depth, inherited_keep):
-        nonlocal stopped
+        nonlocal stopped, content_bytes
+        directory_before = file_identity(os.fstat(descriptor))
         with os.scandir(descriptor) as entries:
             for entry in entries:
                 if stop_if_needed():
@@ -100,6 +144,11 @@ def review_task(selected, *, max_entries=2000, max_depth=12, timeout=10.0, cance
                        "coverage": "examined", "reason": "contents/use/release/recovery unverified"}
                 report["entries"].append(row)
                 coverage["examined"] += 1
+                full_path = canonical / path
+                if any(full_path == root or root in full_path.parents for root in excluded):
+                    row.update(assessment="Keep")
+                    skip(row, "excluded; contents not enumerated")
+                    continue
                 try:
                     metadata = os.stat(entry.name, dir_fd=descriptor, follow_symlinks=False)
                 except OSError as error:
@@ -109,6 +158,9 @@ def review_task(selected, *, max_entries=2000, max_depth=12, timeout=10.0, cance
                 if reason:
                     row.update(assessment="Keep", reason=reason)
                 mode = metadata.st_mode
+                if inspect_content:
+                    row["mode"] = stat.S_IMODE(mode)
+                    row["identity"] = file_identity(metadata)
                 if stat.S_ISLNK(mode) or getattr(metadata, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0):
                     row["kind"] = "link"
                     skip(row, "link/reparse boundary; target not inspected")
@@ -125,7 +177,8 @@ def review_task(selected, *, max_entries=2000, max_depth=12, timeout=10.0, cance
                         try:
                             child = os.open(entry.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
                             opened = os.fstat(child)
-                            if (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino):
+                            if ((opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino)
+                                    or inspect_content and file_identity(opened) != file_identity(metadata)):
                                 unavailable(row["path"], "directory identity changed; descendants unknown", row)
                             elif mount_identity(child) != root_mount:
                                 skip(row, "mount boundary; descendants not inspected")
@@ -155,9 +208,44 @@ def review_task(selected, *, max_entries=2000, max_depth=12, timeout=10.0, cance
                             size["known_allocated_bytes"] += allocated
                             if size["allocated_bytes"] is not None:
                                 size["allocated_bytes"] += allocated
+                    if inspect_content:
+                        if reason:
+                            skip(row, reason)
+                            continue
+                        file_descriptor = None
+                        try:
+                            file_descriptor = os.open(entry.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                                      dir_fd=descriptor)
+                            before = os.fstat(file_descriptor)
+                            if not stat.S_ISREG(before.st_mode) or file_identity(before) != file_identity(metadata):
+                                unavailable(row["path"], "file identity changed before inspection", row)
+                                continue
+                            digest = hashlib.sha256()
+                            while not stop_if_needed():
+                                chunk = os.read(file_descriptor, min(65536, max_content_bytes - content_bytes + 1))
+                                if not chunk:
+                                    break
+                                content_bytes += len(chunk)
+                                if content_bytes > max_content_bytes:
+                                    stopped = True
+                                    partial()
+                                    coverage["stop_reason"] = "content byte limit; remaining contents unknown"
+                                    break
+                                digest.update(chunk)
+                            if not stopped and file_identity(os.fstat(file_descriptor)) == file_identity(before):
+                                row["sha256"] = digest.hexdigest()
+                            else:
+                                unavailable(row["path"], "incomplete or changed file contents", row)
+                        except OSError as error:
+                            unavailable(row["path"], "content unavailable: " + error_code(error), row)
+                        finally:
+                            if file_descriptor is not None:
+                                os.close(file_descriptor)
                 else:
                     row["kind"] = "special"
                     skip(row, "special filesystem entry; not opened")
+        if inspect_content and file_identity(os.fstat(descriptor)) != directory_before:
+            unavailable(relative.as_posix() or ".", "directory changed during content inspection")
 
     descriptor = None
     try:
@@ -168,6 +256,14 @@ def review_task(selected, *, max_entries=2000, max_depth=12, timeout=10.0, cance
             return report
         canonical = Path(selected).resolve(strict=True)
         report["scope"]["canonical"] = str(canonical)
+        if any(canonical == root or root in canonical.parents for root in excluded):
+            report["entries"].append({"path": ".", "kind": "directory", "assessment": "Keep", "coverage": "skipped", "reason": "excluded scope"})
+            partial()
+            coverage["skipped"] += 1
+            return report
+        if inspect_content and str(canonical) != selected:
+            unavailable(".", "linked ancestor in assessment path; contents not inspected")
+            return report
         try:
             record_space(report, shutil.disk_usage(canonical))
         except OSError:
@@ -186,6 +282,11 @@ def review_task(selected, *, max_entries=2000, max_depth=12, timeout=10.0, cance
             report["entries"].append(row)
             skip(row, "protected state/credentials ancestor; descendants not enumerated")
             return report
+        if inspect_content:
+            # An individually assessed nested output may escape generic evidence
+            # retention, but never state ancestry or its own protected name.
+            reason, _ = protection(canonical.name)
+            report["root_protection"] = reason
         if not descriptor_traversal_available():
             unavailable(".", "safe no-follow descriptor traversal unavailable on this runtime/platform")
             return report
@@ -196,7 +297,16 @@ def review_task(selected, *, max_entries=2000, max_depth=12, timeout=10.0, cance
             return report
         root_device = opened.st_dev
         root_mount = mount_identity(descriptor)
+        if inspect_content:
+            report["identity"] = file_identity(opened)
+            report["filesystem_local"] = local_filesystem(descriptor) and not any(
+                part.lower() in {"cloudstorage", "mobile documents", "onedrive", "dropbox"} for part in canonical.parts)
+            if not report["filesystem_local"]:
+                unavailable(".", "nonlocal/synchronized/unsupported filesystem boundary; contents not read")
+                return report
         walk(descriptor, Path(), 1, bool(reason))
+        if inspect_content:
+            report["content"] = {"complete": coverage["complete"], "read_bytes": content_bytes}
     except KeyboardInterrupt:
         partial()
         report["cancelled"] = True
@@ -205,6 +315,8 @@ def review_task(selected, *, max_entries=2000, max_depth=12, timeout=10.0, cance
         report["invalid_scope"] = descriptor is None
         unavailable(".", "scope unavailable: " + error_code(error))
     finally:
+        if inspect_content:
+            report["content"] = {"complete": coverage["complete"] and "identity" in report, "read_bytes": content_bytes}
         if descriptor is not None:
             os.close(descriptor)
     return report

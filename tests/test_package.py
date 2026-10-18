@@ -41,6 +41,16 @@ class PackageInvocation(unittest.TestCase):
             self.assertEqual(report["entries"][0]["path"], "artifact")
             self.assertEqual((task / "artifact").read_bytes(), b"12345")
             self.assertFalse(list((base / "installed").rglob("__pycache__")))
+            project = subprocess.run([sys.executable, "-B", str(base / "installed/skills/task-disk-review/scripts/devspace.py"),
+                                      "review", "--project", str(task), "--json", "--plan-output", str(base / "review-plan.json")],
+                                     cwd=base, text=True, capture_output=True, timeout=15)
+            self.assertEqual(project.returncode, 0, project.stderr)
+            report = json.loads(project.stdout)
+            saved = json.loads((base / "review-plan.json").read_text())
+            self.assertEqual(saved, report["plan"])
+            self.assertEqual(report["scope"]["mode"], "project")
+            self.assertEqual(saved["kind"], "frozen-review-not-authorization")
+            self.assertEqual((task / "artifact").read_bytes(), b"12345")
 
 
 if __name__ == "__main__":

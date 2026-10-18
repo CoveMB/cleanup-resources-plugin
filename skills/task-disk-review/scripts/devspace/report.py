@@ -1,13 +1,43 @@
 """Shared report boundary for task review and future review callers."""
 import json
+import ctypes
+import hashlib
+import os
 import platform
 import socket
+import sys
+
+
+def host_identity():
+    """Hash an OS machine identifier and root identity; no raw identifier reported."""
+    try:
+        if sys.platform == "darwin":
+            identifier = ctypes.create_string_buffer(16)
+            # gethostuuid's timespec deadline is a pair of native longs.
+            deadline = (ctypes.c_long * 2)(1, 0)
+            function = ctypes.CDLL(None).gethostuuid
+            function.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            function.restype = ctypes.c_int
+            if function(identifier, deadline) != 0:
+                return None
+            machine = identifier.raw
+        elif sys.platform == "linux":
+            with open("/etc/machine-id", "rb") as stream:
+                machine = stream.read(256).strip()
+            if len(machine) != 32 or any(byte not in b"0123456789abcdef" for byte in machine):
+                return None
+        else:
+            return None
+        root = os.stat("/")
+        return hashlib.sha256(machine + str((root.st_dev, root.st_ino)).encode()).hexdigest()
+    except (OSError, AttributeError):
+        return None
 
 
 def new_report(selected, canonical, limits):
     return {
         "schema_version": 1,
-        "host": {"hostname": socket.gethostname(), "system": platform.system()},
+        "host": {"hostname": socket.gethostname(), "system": platform.system(), "identity": host_identity()},
         "scope": {"mode": "task", "selected": selected, "canonical": canonical},
         "thread_identity": None,
         "limits": limits,
@@ -46,7 +76,7 @@ def render_text(report):
     quote = lambda value: json.dumps(value, ensure_ascii=True)
     coverage = report["coverage"]
     size = report["size"]
-    lines = ["Read-only task review", "Host: " + quote(report["host"]),
+    lines = ["Read-only " + report["scope"]["mode"] + " review", "Host: " + quote(report["host"]),
              "Selected: " + quote(report["scope"]["selected"]),
              "Canonical scope: " + quote(report["scope"]["canonical"]), "Thread: unknown",
              f"Examined: {coverage['examined']} metadata entries; Skipped: {coverage['skipped']}; Inaccessible: {coverage['inaccessible']}",
@@ -59,5 +89,18 @@ def render_text(report):
     lines.extend(report["warnings"])
     for entry in report["entries"]:
         lines.append(f"{entry['assessment']} | {quote(entry['path'])} | {entry['coverage']} | {entry['reason']}")
+    for row in report.get("candidates", []):
+        lines.append(f"{row['assessment']} | ID {row['id']} | {quote(row['path'])} | {row['reason']}")
+        if row.get("assessment_basis"):
+            lines.append("Assessment basis: " + row["assessment_basis"])
+        if row.get("comparison"):
+            lines.append("Content comparison: " + quote(row["comparison"]))
+        lines.append("Effect: " + row["effect"])
+    if "git" in report:
+        for row in report["git"]["worktrees"]:
+            lines.append("Report-only worktree: " + quote(row))
+        lines.extend("Git limit: " + item for item in report["git"]["limitations"])
+    if "plan" in report:
+        lines.append("Frozen plan digest: " + report["plan"]["digest"] + "; review data, not authorization")
     lines.extend("Limit: " + limitation for limitation in report["limitations"])
     return "\n".join(lines)
