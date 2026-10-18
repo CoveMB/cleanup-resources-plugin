@@ -94,6 +94,18 @@ Consumer states are `released`, `active` or `unknown`. A scoped evidence basis i
 
 If useful, the skill asks at most one grouped ownership/purpose/release/loss question. It never asks users to certify technical facts. Without an answer it preserves unresolved rows and finishes the useful report. Requested cleanup stops after review; no shell/provider/worktree-removal fallback.
 
+## Optional evidence capture
+
+Later task/project/global reviews report advisory packet sizes and possible nested installed environments. Logical bytes **above** 250 MiB warn; **above** 1 GiB request an explanation. Exactly at either threshold does not cross it. Adjust only advice with `--evidence-warn-bytes N` and `--evidence-explain-bytes N` (positive bytes, warning ≤ explanation). These are never disposal, release or eligibility rules.
+
+The report's **Optional for development/evidence workflows** instruction is the capture convention, maintained in `devspace/report.py` and displayed in terminal and JSON output for recognized packets. It can be adopted explicitly in an existing workflow, including incremental planning; installing this skill does not enforce it. No instructions or settings are edited automatically.
+
+Recognition reuses protected evidence/failure/snapshot/log names and selected ancestry. Environment names (`node_modules`, `.venv`, `venv`, `pyvenv.cfg`) are hints, never proof of installation or disposability. Custom evidence names may be missed; the agent can use selected existing context to explain known purpose and size. No package manager is run. At most one useful grouped ownership/purpose/release/loss question remains available; an explanation request is not a technical form or extra approval gate. Unresolved candidates stay unresolved.
+
+Sizes count each observed hardlink once within a packet. Nested packets are grouped under the outer packet; per-packet values are not additive host totals. Sparse logical size may exceed allocation. Partial selected-scope traversal conservatively leaves every packet's full size unknown and reports examined lower bounds, which can still cross a threshold. Unknown allocation stays unknown. No advisory implies reclaimable bytes.
+
+For example, keep work in a separate `working/` directory and selected proof in `evidence/attempt-01/`, preserving the first failure before `attempt-02/`. A short manifest can reference the source commit and local patch, runtime/platform, sanitized command and exit/result, selected log/screenshot/input checksums and consumer/retention requirements. Preserve exact modified/offline dependencies or failure-specific state when those references cannot reconstruct it. This is an optional example, not required layout or historical registration. Legacy packets still need individual assessment; a review date is not a deletion deadline. Human inspection and representative evidence-sufficiency/size comparisons remain I7/Q12 obligations; fewer files alone prove no improvement.
+
 ## Bounds, settings and persistence
 
 Defaults: 2,000 entries per metadata/content phase, depth 12, a cooperative 10-second overall budget, and 256 MiB total content reads across explicitly assessed candidates. Metadata comes first; only selected candidates are reread for content. Reports disclose actual target bytes read separately from deduplicated size. One extra byte detects an over-budget candidate; exhaustion stops further candidate payload reads. Flags `--max-entries`, `--max-depth`, `--timeout`, `--max-content-bytes`, repeated `--hold PATH` and `--exclude PATH` adjust the selected review. Exclusions prevent traversal and eligibility; holds protect ancestors/descendants from selection. Denied/skipped/limited coverage is unknown usage, never zero.

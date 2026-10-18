@@ -7,7 +7,7 @@ import argparse
 import json
 import math
 
-from devspace.report import render_text
+from devspace.report import render_text, EVIDENCE_WARN_BYTES, EVIDENCE_EXPLAIN_BYTES
 from devspace.plans import read_document, review_scope, write_manifest, write_plan
 
 
@@ -56,6 +56,8 @@ def main():
     review.add_argument("--max-depth", type=integer_in_range(1, 64), default=12)
     review.add_argument("--timeout", type=seconds, default=10.0)
     review.add_argument("--max-content-bytes", type=integer_in_range(1, 2**40), default=256 * 1024 * 1024)
+    review.add_argument("--evidence-warn-bytes", type=integer_in_range(1, 2**40), default=EVIDENCE_WARN_BYTES, help="advisory logical packet size; strictly above warns")
+    review.add_argument("--evidence-explain-bytes", type=integer_in_range(1, 2**40), default=EVIDENCE_EXPLAIN_BYTES, help="strictly above requests contextual explanation; never eligibility")
     arguments = parser.parse_args()
     try:
         assessment = read_document(arguments.assessment) if arguments.assessment else None
@@ -70,7 +72,8 @@ def main():
         report = review_scope(selected, mode="global" if arguments.global_review else "task" if arguments.task else "project",
                               assessment=assessment, manifest=manifest, holds=arguments.hold, exclusions=arguments.exclude,
                               max_entries=arguments.max_entries, max_depth=arguments.max_depth, timeout=arguments.timeout,
-                              max_content_bytes=arguments.max_content_bytes)
+                              max_content_bytes=arguments.max_content_bytes,
+                              evidence_warn_bytes=arguments.evidence_warn_bytes, evidence_explain_bytes=arguments.evidence_explain_bytes)
         if arguments.plan_output:
             write_plan(arguments.plan_output, report["plan"])
         if arguments.manifest_output:

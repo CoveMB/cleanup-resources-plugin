@@ -7,7 +7,8 @@ import stat
 import time
 
 from .git_inventory import inventory_git
-from .report import new_report
+from .report import (new_report, record_evidence_guidance, validate_evidence_thresholds,
+                     EVIDENCE_WARN_BYTES, EVIDENCE_EXPLAIN_BYTES)
 from .review import (descriptor_traversal_available, file_identity, protection, review_task,
                      same_path as _same_path, path_inside as _inside)
 
@@ -344,12 +345,15 @@ def validate_manifest(manifest):
 
 
 def review_scope(selected, *, mode="task", assessment=None, manifest=None, holds=(), exclusions=(),
-                 max_entries=2000, max_depth=12, timeout=10.0, max_content_bytes=256 * 1024 * 1024, cancelled=None):
+                 max_entries=2000, max_depth=12, timeout=10.0, max_content_bytes=256 * 1024 * 1024, cancelled=None,
+                 evidence_warn_bytes=EVIDENCE_WARN_BYTES, evidence_explain_bytes=EVIDENCE_EXPLAIN_BYTES):
+    validate_evidence_thresholds(evidence_warn_bytes, evidence_explain_bytes)
     if mode == "global":
         from .global_inventory import review_global
         return review_global(selected, assessment=assessment, manifest=manifest, holds=holds, exclusions=exclusions,
                              max_entries=max_entries, max_depth=max_depth, timeout=timeout,
-                             max_content_bytes=max_content_bytes, cancelled=cancelled)
+                             max_content_bytes=max_content_bytes, cancelled=cancelled,
+                             evidence_warn_bytes=evidence_warn_bytes, evidence_explain_bytes=evidence_explain_bytes)
     if mode not in {"task", "project"}:
         raise ValueError("unsupported review mode")
     started = time.monotonic()
@@ -485,6 +489,7 @@ def review_scope(selected, *, mode="task", assessment=None, manifest=None, holds
                     for specification in related)):
                 row.update(assessment="Review", reason="consumer obligations on an overlapping resource remain unresolved")
     report["content"] = {"read_bytes": content_bytes_read, "examined": max_entries - content_entries_remaining}
+    record_evidence_guidance(report, [report, *report["linked_reviews"]], evidence_warn_bytes, evidence_explain_bytes)
     freeze_review(report, assessment, manifest, holds, exclusions, {**limits, "timeout_seconds": timeout, "max_content_bytes": max_content_bytes})
     return report
 

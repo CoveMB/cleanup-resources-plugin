@@ -6,6 +6,7 @@ import os
 import platform
 import socket
 import sys
+from pathlib import Path, PurePosixPath
 
 
 def host_identity():
@@ -72,6 +73,81 @@ def record_space(report, usage):
         report["warnings"].append("Warning: filesystem free space below 10%.")
 
 
+EVIDENCE_WARN_BYTES = 250 * 1024 * 1024
+EVIDENCE_EXPLAIN_BYTES = 1024 * 1024 * 1024
+OPTIONAL_CAPTURE_INSTRUCTION = (
+    "Optional for development/evidence workflows, including incremental planning: run installations, builds, "
+    "tests and reproductions in a separate working directory outside finalized evidence. Preserve original failure/output "
+    "before retry; keep attempts distinguishable. Select useful logs, screenshots, results, relevant source changes and "
+    "necessary inputs rather than installed projects wholesale. Keep a compact manifest: purpose, source commit and "
+    "local changes, versions/platform, sanitized invocation, results, references, useful checksums and retention requirements. "
+    "Preserve unavailable or modified dependencies, unique inputs and exact failure-specific state when reconstruction is "
+    "unreliable. A review date is not a deletion deadline. Installing this skill does not enforce the convention. "
+    "Legacy packets require individual assessment; preserve necessary originals and document any separately approved reductions."
+)
+
+
+def validate_evidence_thresholds(warning, explanation):
+    if any(type(value) is not int or not 0 < value <= 2**40 for value in (warning, explanation)) or warning > explanation:
+        raise ValueError("evidence thresholds require positive byte counts, warning <= explanation <= 2**40")
+
+
+def record_evidence_guidance(report, snapshots, warning, explanation):
+    """Describe metadata hints, never change assessment or frozen selection data."""
+    packets = []
+    for snapshot in snapshots:
+        groups = {}
+        for relative in snapshot.get("evidence_roots", []):
+            root = PurePosixPath(relative)
+            groups[root] = {"path": str(Path(snapshot["scope"]["canonical"]) / relative),
+                            "complete": snapshot["size"]["complete"], "known_logical_bytes": 0,
+                            "known_allocated_bytes": 0, "allocation_known": True,
+                            "environment_hints": [], "seen": set()}
+            if Path(groups[root]["path"]).name.lower() in {"node_modules", ".venv", "venv"}:
+                groups[root]["environment_hints"].append(".")
+        for entry in snapshot["entries"]:
+            path = PurePosixPath(entry["path"])
+            root = next((ancestor for ancestor in (path, *path.parents) if ancestor in groups), None)
+            if root is None:
+                continue
+            packet = groups[root]
+            if (entry["kind"] == "directory" and path.name.lower() in {"node_modules", ".venv", "venv"}
+                    or entry["kind"] == "file" and path.name.lower() == "pyvenv.cfg"):
+                packet["environment_hints"].append(entry["path"])
+            if entry["kind"] != "file":
+                continue
+            identity = tuple(entry["accounting_identity"])
+            if identity in packet["seen"]:
+                continue
+            packet["seen"].add(identity)
+            packet["known_logical_bytes"] += entry["logical_bytes"]
+            if entry["allocated_bytes"] is None:
+                packet["allocation_known"] = False
+            else:
+                packet["known_allocated_bytes"] += entry["allocated_bytes"]
+        for packet in groups.values():
+            packet.pop("seen")
+            allocation_known = packet.pop("allocation_known")
+            packet["logical_bytes"] = packet["known_logical_bytes"] if packet["complete"] else None
+            packet["allocated_bytes"] = packet["known_allocated_bytes"] if packet["complete"] and allocation_known else None
+            known = packet["known_logical_bytes"]
+            packet["level"] = ("explanation" if known > explanation else "warning" if known > warning
+                               else "none" if packet["complete"] else "unknown")
+            label = json.dumps(packet["path"], ensure_ascii=True)
+            if packet["level"] in {"warning", "explanation"}:
+                message = f"Evidence advisory: {label}: {known} examined logical bytes"
+                if not packet["complete"]:
+                    message += " (lower bound; full size unknown)"
+                message += "; " + ("explain retained size using known purpose/context where possible."
+                                   if packet["level"] == "explanation" else "oversized packet.")
+                report["warnings"].append(message)
+            if packet["environment_hints"]:
+                report["warnings"].append(f"Evidence advisory: {label}: possible nested installed environment from name hints; individually assess, never infer disposability.")
+            packets.append(packet)
+    report["evidence_capture"] = {"warning_bytes": warning, "explanation_bytes": explanation, "packets": packets,
+                                  "optional_instruction": OPTIONAL_CAPTURE_INSTRUCTION}
+
+
 def render_text(report):
     quote = lambda value: json.dumps(value, ensure_ascii=True)
     coverage = report["coverage"]
@@ -108,6 +184,11 @@ def render_text(report):
         lines.append("Report-only Git inventory: " + quote(inventory))
     if "retention" in report:
         lines.append("Independent Codex retention: " + quote(report["retention"]))
+    capture = report.get("evidence_capture", {})
+    if capture.get("packets"):
+        lines.append("Evidence capture advisory; logical thresholds only, never release/eligibility rules. Sizes are per packet, not additive host totals.")
+        lines.extend("Evidence packet: " + quote(packet) for packet in capture["packets"])
+        lines.append(capture["optional_instruction"])
     if "plan" in report:
         lines.append("Frozen plan digest: " + report["plan"]["digest"] + "; review data, not authorization")
     lines.extend("Limit: " + limitation for limitation in report["limitations"])

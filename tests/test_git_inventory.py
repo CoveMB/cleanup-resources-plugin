@@ -194,10 +194,18 @@ class GitInventory(unittest.TestCase):
         (linked / ".env").write_text("SYNTHETIC_LINKED_SECRET")
         (linked / "nested").mkdir()
         (linked / "nested/output").write_text("fixture output")
+        (linked / "evidence/node_modules").mkdir(parents=True)
+        (linked / "evidence/original-failure.txt").write_text("first attempt")
         before = snapshot(self.fixture)
         with patch.dict(os.environ, self.environment, clear=True):
             report = review_scope(self.project, mode="project")
         self.assertIn(str(linked), report["scope_roots"])
+        packet = report["evidence_capture"]["packets"][0]
+        self.assertEqual(packet["path"], str(linked / "evidence"))
+        self.assertEqual(packet["known_logical_bytes"], len("first attempt"))
+        self.assertTrue(packet["environment_hints"])
+        from devspace.report import render_text
+        self.assertIn("possible nested installed environment", render_text(report))
         rows = {row["path"]: row for row in report["candidates"]}
         self.assertEqual(rows[str(linked / "nested")]["assessment"], "Review")
         self.assertTrue(any(entry["path"] == ".env" and entry["assessment"] == "Keep"

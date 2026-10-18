@@ -10,7 +10,7 @@ import shutil
 import time
 
 from .git_inventory import inventory_git, run_readonly, InspectionUnavailable, InspectionCancelled
-from .report import new_report
+from .report import new_report, OPTIONAL_CAPTURE_INSTRUCTION
 from . import plans
 
 
@@ -76,7 +76,9 @@ def inventory_docker(endpoint, *, timeout, cancelled=None):
 
 
 def review_global(config, *, assessment=None, manifest=None, holds=(), exclusions=(), max_entries=2000,
-                  max_depth=12, timeout=10.0, max_content_bytes=256 * 1024 * 1024, cancelled=None):
+                  max_depth=12, timeout=10.0, max_content_bytes=256 * 1024 * 1024, cancelled=None,
+                  evidence_warn_bytes=plans.EVIDENCE_WARN_BYTES, evidence_explain_bytes=plans.EVIDENCE_EXPLAIN_BYTES):
+    plans.validate_evidence_thresholds(evidence_warn_bytes, evidence_explain_bytes)
     validate_config(config)
     assessment = assessment or EMPTY_ASSESSMENT
     plans._validate_assessment(assessment)
@@ -181,7 +183,8 @@ def review_global(config, *, assessment=None, manifest=None, holds=(), exclusion
                 scoped = {**assessment, "candidates": specifications}
                 snapshot = plans.review_scope(path, mode="task", assessment=scoped, manifest=manifest, holds=holds,
                                               exclusions=exclusions, max_entries=entries_remaining, max_depth=max_depth,
-                                              timeout=remaining(), max_content_bytes=bytes_remaining, cancelled=cancelled)
+                                              timeout=remaining(), max_content_bytes=bytes_remaining, cancelled=cancelled,
+                                              evidence_warn_bytes=evidence_warn_bytes, evidence_explain_bytes=evidence_explain_bytes)
                 bytes_remaining = max(0, bytes_remaining - snapshot["content"]["read_bytes"])
                 report["content"]["read_bytes"] += snapshot["content"]["read_bytes"]
                 report["content"]["examined"] += snapshot["content"]["examined"]
@@ -259,6 +262,9 @@ def review_global(config, *, assessment=None, manifest=None, holds=(), exclusion
     report["size"]["complete"] = report["coverage"]["complete"]
     if report["cancelled"]:
         report["coverage"]["stop_reason"] = "global review cancelled"
+    report["evidence_capture"] = {"warning_bytes": evidence_warn_bytes, "explanation_bytes": evidence_explain_bytes,
+        "packets": [packet for snapshot in report["root_reviews"] for packet in snapshot["evidence_capture"]["packets"]],
+        "optional_instruction": OPTIONAL_CAPTURE_INSTRUCTION}
     # The same frozen data owner protects future selection. Provider paths and
     # configured roots remain explicit even when unavailable or overlapping.
     plans.freeze_review(report, assessment, manifest, holds, exclusions,

@@ -66,6 +66,20 @@ class PackageInvocation(unittest.TestCase):
             self.assertIsNone(report["retention"]["desktop"]["effective"])
             self.assertEqual((task / "artifact").read_bytes(), b"12345")
 
+            evidence = task / "evidence"
+            (evidence / ".venv").mkdir(parents=True)
+            original = evidence / "failure.txt"
+            original.write_bytes(b"original attempt")
+            captured = subprocess.run([sys.executable, "-B", str(base / "installed/skills/task-disk-review/scripts/devspace.py"),
+                                       "review", "--task", str(task), "--evidence-warn-bytes", "1",
+                                       "--evidence-explain-bytes", "2"], cwd=base, text=True, capture_output=True, timeout=15)
+            self.assertEqual(captured.returncode, 0, captured.stderr)
+            self.assertIn("explain retained size", captured.stdout)
+            self.assertIn("possible nested installed environment", captured.stdout)
+            self.assertIn("Optional for development/evidence workflows, including incremental planning", captured.stdout)
+            self.assertEqual(original.read_bytes(), b"original attempt")
+            self.assertEqual((task / "artifact").read_bytes(), b"12345")
+
 
 if __name__ == "__main__":
     unittest.main()

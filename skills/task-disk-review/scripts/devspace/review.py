@@ -114,6 +114,7 @@ def review_task(selected, *, max_entries=2000, max_depth=12, timeout=10.0, cance
     selected = os.path.abspath(os.fspath(selected))
     report = new_report(selected, None, {"max_entries": max_entries, "max_depth": max_depth, "timeout_seconds": timeout})
     coverage, size = report["coverage"], report["size"]
+    report["evidence_roots"] = []
     seen_files = set()
     started = time.monotonic()
     stopped = False
@@ -201,6 +202,8 @@ def review_task(selected, *, max_entries=2000, max_depth=12, timeout=10.0, cance
                     skip(row, "link/reparse boundary; target not inspected")
                 elif stat.S_ISDIR(mode):
                     row["kind"] = "directory"
+                    if reason and not private_directory and not inherited_keep:
+                        report["evidence_roots"].append(row["path"])
                     if metadata.st_dev != root_device or os.path.ismount(canonical / path):
                         skip(row, "mount/device boundary; descendants not inspected")
                     elif private_directory:
@@ -321,6 +324,8 @@ def review_task(selected, *, max_entries=2000, max_depth=12, timeout=10.0, cance
             report["entries"].append(row)
             skip(row, "protected state/credentials ancestor; descendants not enumerated")
             return report
+        if reason:
+            report["evidence_roots"].append(".")
         if inspect_content:
             # An individually assessed nested output may escape generic evidence
             # retention, but never state ancestry or its own protected name.
