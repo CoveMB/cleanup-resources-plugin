@@ -189,7 +189,11 @@ class ReviewFailures(unittest.TestCase):
         from devspace.report import render_text
         (self.task / "bound").mkdir()
         (self.task / "bound/hidden").write_text("x")
-        with patch("devspace.review.mount_identity", side_effect=(10, 11), create=True), patch("devspace.review.os.path.ismount", return_value=False):
+        root = self.task.stat()
+        def observed_mount(descriptor):
+            metadata = os.fstat(descriptor)
+            return 10 if (metadata.st_dev, metadata.st_ino) == (root.st_dev, root.st_ino) else 11
+        with patch("devspace.review.mount_identity", side_effect=observed_mount), patch("devspace.review.os.path.ismount", return_value=False):
             report = review_task(self.task)
         self.assertEqual(report["coverage"]["skipped"], 1)
         self.assertNotIn("hidden", render_text(report))
