@@ -6,6 +6,8 @@ import copy
 import hashlib
 import json
 import os
+import shlex
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -22,6 +24,18 @@ class NativeWorktreeCleanup(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="native-worktree-fixture-")
         self.addCleanup(temporary.cleanup)
         self.base = Path(temporary.name).resolve()
+        # Product Git deliberately strips inherited GIT_* scope overrides.
+        # Reuse the inventory fixture's real-executable boundary to isolate
+        # hosted global/system configuration, retaining repository-local guards.
+        executable = shutil.which("git")
+        self.assertIsNotNone(executable)
+        wrapper = self.base / "fixture-git"
+        wrapper.write_text("#!/bin/sh\nGIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null exec "
+                           + shlex.quote(executable) + ' "$@"\n')
+        wrapper.chmod(0o700)
+        discovery = patch("devspace.git_inventory.shutil.which", return_value=str(wrapper))
+        discovery.start()
+        self.addCleanup(discovery.stop)
         self.repository = self.base / "repository"
         self.repository.mkdir()
         self.git(self.repository, "init", "-b", "main")
@@ -552,3 +566,21 @@ class NativeWorktreeCleanup(unittest.TestCase):
             report = self.review()
             self.assertNotEqual(report["candidates"][0]["assessment"], "Eligible")
             self.assertEqual(log.read_bytes(), payload)
+
+    def test_fixture_host_configuration_isolation_keeps_repository_filter_protection(self):
+        home = self.base / "fixture-home"
+        home.mkdir()
+        (home / ".gitconfig").write_text('[filter "hosted"]\n clean = cat\n')
+        with patch.dict(os.environ, {"HOME": str(home)}):
+            report = self.review()
+        self.assertEqual([row["assessment"] for row in report["candidates"][:2]], ["Eligible", "Eligible"])
+        marker = self.base / "filter-executed"
+        script = self.records / "filter.py"
+        script.write_text("from pathlib import Path\nimport sys\nPath(sys.argv[1]).write_text('unexpected execution')\nsys.stdout.buffer.write(sys.stdin.buffer.read())\n")
+        self.git(self.worktrees[0], "config", "filter.fixture.clean", shlex.join([sys.executable, str(script), str(marker)]))
+        (self.worktrees[0] / ".gitattributes").write_text("*.txt filter=fixture\n")
+        from devspace import git_worktree
+        with self.assertRaisesRegex(ValueError, "content filters"):
+            git_worktree.inspect(str(self.repository), str(self.worktrees[0]), "refs/heads/topic-0")
+        self.assertFalse(marker.exists())
+        self.retained()
