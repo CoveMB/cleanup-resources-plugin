@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -82,6 +83,29 @@ class GlobalCoverage(unittest.TestCase):
         with self.assertRaises(ValueError):
             plans.write_plan(storage / "plan.json", report["plan"])
         self.assertFalse((storage / "plan.json").exists())
+
+    def test_global_manifest_output_protects_configured_and_provider_roots(self):
+        skipped = self.base / "excluded-development"
+        storage = self.base / "package-store"
+        worktrees = self.base / "managed-worktrees"
+        for path in (skipped, storage, worktrees):
+            path.mkdir()
+        self.config.update(roots=[str(self.root), str(skipped)], exclusions=[str(skipped)],
+                           package_storage=[str(storage)], codex_worktrees=[str(worktrees)])
+        config = self.base / "config.json"
+        config.write_text(json.dumps(self.config))
+        manifest = self.base / "manifest.json"
+        manifest.write_text(json.dumps({"schema_version": 1, "resources": []}))
+        before = {str(path): path.read_bytes() for path in self.base.rglob("*") if path.is_file()}
+        for root in (self.root, skipped, storage, worktrees):
+            with self.subTest(root=root):
+                destination = root / "manifest-output.json"
+                result = subprocess.run([sys.executable, "-B", str(ROOT / "skills/task-disk-review/scripts/devspace.py"),
+                    "review", "--global", "--config", str(config), "--manifest", str(manifest),
+                    "--manifest-output", str(destination)], capture_output=True, timeout=15)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertFalse(destination.exists())
+        self.assertEqual({str(path): path.read_bytes() for path in self.base.rglob("*") if path.is_file()}, before)
 
     def test_host_mismatch_refuses_all_probes(self):
         self.config.update(host_identity="different-host", docker_host="unix:///not-probed.sock")
@@ -327,3 +351,74 @@ class GlobalAssessment(unittest.TestCase):
         self.assertEqual(rows["B-original-failure"]["assessment"], "Keep")
         self.assertEqual(rows["D"]["assessment"], "Review")
         self.assertEqual(plans.validate_selection(report["plan"], [rows["A"]["id"]])[0]["id"], rows["A"]["id"])
+
+    def test_global_cross_root_candidates_preserve_each_others_evidence(self):
+        fixture = test_plans.AssessedPlans(methodName="test_source_journey_and_equivalent_unregistered_assessment_preserve_bytes")
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        other = fixture.base / "other-project"
+        target = other / "generated"
+        target.mkdir(parents=True)
+        (target / "data.txt").write_bytes((fixture.records / "source.txt").read_bytes())
+        (target / "data.txt").chmod(0o644)
+        import hashlib
+        references = copy.deepcopy(fixture.references)
+        references["retained-input"] = {"path": str(target / "data.txt"),
+            "sha256": hashlib.sha256(b"ordinary fixture library\n").hexdigest()}
+        first, second = copy.deepcopy(fixture.specifications[:2])
+        first["path"] = str(fixture.project / "A")
+        second["path"] = str(target)
+        config = {"schema_version": 1, "roots": [str(fixture.project), str(other)]}
+        before = fixture.bytes()
+        for role in ("rebuild-input", "context-basis"):
+            candidate = copy.deepcopy(first)
+            if role == "rebuild-input":
+                candidate["recovery"]["inputs"] = ["retained-input"]
+            else:
+                candidate["content"]["basis"].append("retained-input")
+            for specification in (candidate, second):
+                single = plans.review_scope(config, mode="global", assessment={"schema_version": 1,
+                    "references": references, "candidates": [specification]})
+                row = next(row for row in single["candidates"] if row["path"] == specification["path"])
+                self.assertEqual(row["assessment"], "Eligible")
+                plans.validate_selection(single["plan"], [row["id"]])
+            combined = plans.review_scope(config, mode="global", assessment={"schema_version": 1,
+                "references": references, "candidates": [candidate, second]})
+            rows = [row for row in combined["candidates"] if row["path"] in {candidate["path"], second["path"]}]
+            self.assertEqual(len(rows), 2)
+            self.assertTrue(all(row["comparison"]["matched"] for row in rows))
+            self.assertEqual([row["assessment"] for row in rows], ["Review", "Review"])
+            for root_review in combined["root_reviews"]:
+                payload = {key: value for key, value in root_review["plan"].items() if key != "digest"}
+                self.assertEqual(root_review["plan"]["digest"], plans.digest(payload))
+        self.assertEqual(fixture.bytes(), before)
+
+    def test_global_file_mount_boundary_is_refused_before_target_read(self):
+        fixture = test_plans.AssessedPlans(methodName="test_source_journey_and_equivalent_unregistered_assessment_preserve_bytes")
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        target = fixture.project / "A/data.txt"
+        identity = target.stat()
+        specification = copy.deepcopy(fixture.specifications[0])
+        specification["path"] = str(fixture.project / "A")
+        def mount(descriptor):
+            observed = os.fstat(descriptor)
+            return 11 if (observed.st_dev, observed.st_ino) == (identity.st_dev, identity.st_ino) else 10
+        from devspace import review
+        real = review.os.read
+        target_reads = []
+        def observe(descriptor, count):
+            observed = os.fstat(descriptor)
+            if (observed.st_dev, observed.st_ino) == (identity.st_dev, identity.st_ino):
+                target_reads.append(descriptor)
+            return real(descriptor, count)
+        with patch("devspace.review.mount_identity", side_effect=mount), \
+             patch("devspace.review.local_filesystem", return_value=True), \
+             patch("devspace.review.os.read", side_effect=observe):
+            report = plans.review_scope({"schema_version": 1, "roots": [str(fixture.project)]}, mode="global",
+                assessment={**fixture.assessment, "candidates": [specification]})
+        row = next(row for row in report["candidates"] if row["path"] == specification["path"])
+        self.assertEqual(row["assessment"], "Unavailable")
+        self.assertFalse(row["observation"]["complete"])
+        self.assertEqual(report["content"]["read_bytes"], 0)
+        self.assertEqual(target_reads, [])

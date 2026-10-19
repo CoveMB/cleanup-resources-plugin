@@ -189,6 +189,7 @@ def review_global(config, *, assessment=None, manifest=None, holds=(), exclusion
                 report["warnings"].extend(json.dumps(str(path)) + ": " + warning for warning in snapshot["warnings"])
                 entries_remaining -= sum(candidate.get("observation", {}).get("coverage", {}).get("examined", 0) for candidate in snapshot["candidates"])
                 for candidate in snapshot["candidates"]:
+                    candidate = dict(candidate)
                     if candidate["id"] not in seen_candidates:
                         if any(plans._same_path(Path(candidate["path"]), root) for root in configured_roots):
                             candidate.update(assessment="Keep", reason="configured development root")

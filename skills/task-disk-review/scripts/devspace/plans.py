@@ -484,12 +484,6 @@ def review_scope(selected, *, mode="task", assessment=None, manifest=None, holds
                     or any(consumer["state"] == "unknown" for consumer in specification.get("consumers", []))
                     for specification in related)):
                 row.update(assessment="Review", reason="consumer obligations on an overlapping resource remain unresolved")
-    eligible = [row for row in report["candidates"] if row["assessment"] == "Eligible"]
-    for row in eligible:
-        if any(other is not row and _overlap(Path(row["path"]), Path(other["path"])) for other in eligible):
-            row.update(assessment="Review", reason="overlapping eligible targets; require a narrower plan")
-        elif any(other is not row and _evidence_conflict(row, other) for other in eligible):
-            row.update(assessment="Review", reason="eligible targets contain another candidate's evidence or rebuild inputs; require a narrower plan")
     report["content"] = {"read_bytes": content_bytes_read, "examined": max_entries - content_entries_remaining}
     freeze_review(report, assessment, manifest, holds, exclusions, {**limits, "timeout_seconds": timeout, "max_content_bytes": max_content_bytes})
     return report
@@ -497,6 +491,12 @@ def review_scope(selected, *, mode="task", assessment=None, manifest=None, holds
 
 def freeze_review(report, assessment, manifest, holds, exclusions, limits):
     """Freeze the shared review contract; this never grants authorization."""
+    eligible = [row for row in report["candidates"] if row["assessment"] == "Eligible"]
+    for row in eligible:
+        if any(other is not row and _overlap(Path(row["path"]), Path(other["path"])) for other in eligible):
+            row.update(assessment="Review", reason="overlapping eligible targets; require a narrower plan")
+        elif any(other is not row and _evidence_conflict(row, other) for other in eligible):
+            row.update(assessment="Review", reason="eligible targets contain another candidate's evidence or rebuild inputs; require a narrower plan")
     report["limitations"][0] = "Discovery is metadata-only; separately assessed candidates include explicit bounded content comparison and agent interpretation."
     report["limitations"] = ["Reports contain metadata/digests, never inspected file payloads; inspect before sharing."
                              if item.startswith("Reports contain host and selected/relative path metadata;") else item
