@@ -34,8 +34,10 @@ def _open_parent(path):
         raise ValueError("safe path inspection unavailable")
     descriptor = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
     try:
+        # Search-only handles avoid requiring directory listing access to reach selected leaves.
+        access_mode = getattr(os, "O_SEARCH", os.O_RDONLY)
         for component in path.parts[1:-1]:
-            child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            child = os.open(component, access_mode | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
             os.close(descriptor)
             descriptor = child
         return descriptor

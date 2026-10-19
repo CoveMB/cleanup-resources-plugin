@@ -338,6 +338,49 @@ class AssessedPlans(unittest.TestCase):
         self.assertIn(standalone.returncode, (0, 2), standalone.stderr)
         self.assertTrue(json.loads(standalone.stdout)["plan"]["digest"])
 
+    @unittest.skipUnless(hasattr(os, "O_SEARCH"), "search-only directory handles unavailable")
+    def test_reference_read_through_search_only_ancestor(self):
+        ancestor = self.records / "search-only"
+        documents = ancestor / "documents"
+        documents.mkdir(parents=True)
+        document = documents / "review.json"
+        document.write_text('{"schema_version": 1, "purpose": "public fixture"}')
+        if os.geteuid() == 0:
+            self.skipTest("root bypasses directory read permissions")
+        for restricted in (ancestor, documents):
+            with self.subTest(search_only_directory=restricted.name):
+                restricted.chmod(0o111)
+                try:
+                    with self.assertRaises(PermissionError):
+                        descriptor = os.open(restricted, os.O_RDONLY | os.O_DIRECTORY)
+                        os.close(descriptor)
+                    try:
+                        observed = self.owner().read_document(document)
+                    except ValueError as error:
+                        self.fail(f"public reference behind search-only directory was refused: {error}")
+                    self.assertEqual(observed, {"schema_version": 1, "purpose": "public fixture"})
+                finally:
+                    restricted.chmod(0o755)
+
+    def test_reference_read_without_platform_search_flag(self):
+        document = self.records / "review.json"
+        document.write_text('{"schema_version": 1, "purpose": "portable fixture"}')
+        with patch.dict(os.__dict__):
+            os.__dict__.pop("O_SEARCH", None)
+            self.assertEqual(self.owner().read_document(document),
+                             {"schema_version": 1, "purpose": "portable fixture"})
+
+    def test_reference_ancestor_and_leaf_links_remain_refused(self):
+        document = self.records / "review.json"
+        document.write_text('{"schema_version": 1}')
+        ancestor_alias = self.base / "records-alias"
+        ancestor_alias.symlink_to(self.records, target_is_directory=True)
+        leaf_alias = self.records / "review-alias.json"
+        leaf_alias.symlink_to(document)
+        for path in (ancestor_alias / document.name, leaf_alias):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                self.owner().read_document(path)
+
     def test_excluded_contents_are_not_enumerated_and_boundaries_are_report_only(self):
         excluded = self.project / "excluded"
         excluded.mkdir()
