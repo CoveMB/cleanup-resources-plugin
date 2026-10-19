@@ -244,6 +244,60 @@ class AssessedPlans(unittest.TestCase):
         plans.write_plan(self.records / "plan.json", plan)
         self.assertEqual(plans.read_document(self.records / "plan.json"), plan)
 
+    def test_manifest_output_cannot_modify_reviewed_roots(self):
+        manifest = {"schema_version": 1, "resources": [{"path": str(self.project / "A"),
+                    "origin": "helper-created", "purpose": "fixture", "association": "fixture-project",
+                    "consumers": [], "retention": [], "release_checkpoint": "completion"}]}
+        source = self.records / "manifest-input.json"
+        source.write_text(json.dumps(manifest))
+        before = self.bytes()
+        for mode in ("task", "project"):
+            with self.subTest(mode=mode):
+                destination = self.project / (mode + "-manifest.json")
+                result = subprocess.run([sys.executable, "-B", str(CLI), "review", "--" + mode,
+                    str(self.project), "--manifest", str(source), "--manifest-output", str(destination)],
+                    capture_output=True, timeout=20)
+                self.assertEqual(result.returncode, 1)
+                self.assertFalse(destination.exists())
+        self.assertEqual(self.bytes(), before)
+        destination = self.records / "manifest-output.json"
+        result = subprocess.run([sys.executable, "-B", str(CLI), "review", "--task", str(self.project),
+            "--manifest", str(source), "--manifest-output", str(destination)], capture_output=True, timeout=20)
+        self.assertIn(result.returncode, (0, 2), result.stderr)
+        self.assertEqual(json.loads(destination.read_text()), manifest)
+
+    def test_combined_selection_preserves_other_candidates_references(self):
+        owner = self.owner()
+        self.references["retained-input"] = {"path": str(self.project / "packet/C/data.txt"),
+            "sha256": hashlib.sha256(b"ordinary fixture library\n").hexdigest()}
+        before = self.bytes()
+        for role in ("rebuild-input", "context-basis"):
+            with self.subTest(role=role):
+                first = copy.deepcopy(self.specifications[0])
+                second = copy.deepcopy(self.specifications[1])
+                if role == "rebuild-input":
+                    first["recovery"]["inputs"] = ["retained-input"]
+                else:
+                    first["content"]["basis"].append("retained-input")
+                first_report = self.review({**self.assessment, "candidates": [first]})
+                second_report = self.review({**self.assessment, "candidates": [second]})
+                first_row, second_row = first_report["candidates"][0], second_report["candidates"][0]
+                self.assertEqual((first_row["assessment"], second_row["assessment"]), ("Eligible", "Eligible"))
+                owner.validate_selection(first_report["plan"], [first_row["id"]])
+                owner.validate_selection(second_report["plan"], [second_row["id"]])
+                plan = copy.deepcopy(first_report["plan"])
+                plan["candidates"] = [first_row, second_row]
+                plan["digest"] = owner.digest({key: value for key, value in plan.items() if key != "digest"})
+                for order in ([first_row["id"], second_row["id"]], [second_row["id"], first_row["id"]]):
+                    with self.subTest(order=order), self.assertRaises(ValueError):
+                        owner.validate_selection(plan, order)
+                combined = self.review({**self.assessment, "candidates": [first, second]})
+                for row in combined["candidates"][:2]:
+                    self.assertTrue(row["comparison"]["matched"])
+                    self.assertEqual(row["assessment"], "Review")
+                    self.assertIn("evidence", row["reason"])
+        self.assertEqual(self.bytes(), before)
+
     def test_terminal_task_project_and_standalone_plan_output(self):
         assessment_path = self.records / "assessment.json"
         assessment_path.write_text(json.dumps(self.assessment))

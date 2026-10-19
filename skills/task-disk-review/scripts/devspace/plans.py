@@ -125,6 +125,12 @@ def _overlap(first, second):
     return _inside(first, second) or _inside(second, first)
 
 
+def _evidence_conflict(first, second):
+    return any(_inside(Path(reference["path"]), Path(target["path"]))
+               for candidate, target in ((first, second), (second, first))
+               for reference in candidate.get("references", {}).values())
+
+
 def _reference(identifier, references, target, observed, deadline):
     reference = references[identifier]
     if set(reference) != {"path", "sha256"}:
@@ -498,6 +504,8 @@ def review_scope(selected, *, mode="task", assessment=None, manifest=None, holds
     for row in eligible:
         if any(other is not row and _overlap(Path(row["path"]), Path(other["path"])) for other in eligible):
             row.update(assessment="Review", reason="overlapping eligible targets; require a narrower plan")
+        elif any(other is not row and _evidence_conflict(row, other) for other in eligible):
+            row.update(assessment="Review", reason="eligible targets contain another candidate's evidence or rebuild inputs; require a narrower plan")
     report["limitations"].append("Assessed eligibility includes agent interpretation, not semantic certification by this helper. Frozen review data is not authorization; no apply command exists.")
     report["limitations"][0] = "Discovery is metadata-only; separately assessed candidates include explicit bounded content comparison and agent interpretation."
     report["limitations"][-2] = "Reports contain metadata/digests, never inspected file payloads; inspect before sharing."
@@ -538,6 +546,8 @@ def validate_selection(plan, selected_ids, *, host=None):
             raise ValueError("unsupported effect/host")
         if any(_overlap(path, Path(other["path"])) for other in selected):
             raise ValueError("overlapping selected targets")
+        if any(_evidence_conflict(row, other) for other in selected):
+            raise ValueError("selected target contains another selection's evidence or rebuild inputs")
         selected.append(row)
     return selected
 
@@ -564,6 +574,7 @@ def write_plan(destination, plan):
     _write_exclusive(destination, plan, [row["path"] for row in plan["candidates"]] + plan["scope_roots"])
 
 
-def write_manifest(destination, manifest):
+def write_manifest(destination, manifest, scope_roots=()):
     validate_manifest(manifest)
-    _write_exclusive(destination, manifest, [resource["path"] for resource in manifest["resources"]])
+    _write_exclusive(destination, manifest,
+                     [resource["path"] for resource in manifest["resources"]] + list(scope_roots))

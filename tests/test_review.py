@@ -194,6 +194,23 @@ class ReviewFailures(unittest.TestCase):
         self.assertEqual(report["coverage"]["skipped"], 1)
         self.assertNotIn("hidden", render_text(report))
 
+    def test_content_never_reads_a_file_across_mount_boundaries(self):
+        from devspace.review import review_task
+        payload = self.task / "bound-file"
+        payload.write_bytes(b"SYNTHETIC_OTHER_MOUNT_PAYLOAD")
+        for observed_mount in (11, OSError(5, "mount identity unavailable")):
+            with self.subTest(mount=observed_mount):
+                with patch("devspace.review.mount_identity", side_effect=(10, observed_mount)), \
+                        patch("devspace.review.local_filesystem", return_value=True), \
+                        patch("devspace.review.os.read", wraps=os.read) as read:
+                    report = review_task(self.task, inspect_content=True)
+                read.assert_not_called()
+                self.assertEqual(report["entries"][0]["assessment"], "Unavailable")
+                self.assertFalse(report["content"]["complete"])
+                self.assertEqual(report["content"]["read_bytes"], 0)
+                self.assertNotIn("sha256", report["entries"][0])
+                self.assertEqual(payload.read_bytes(), b"SYNTHETIC_OTHER_MOUNT_PAYLOAD")
+
     def test_mount_boundary_stays_report_only(self):
         from devspace.review import review_task
         from devspace.report import render_text

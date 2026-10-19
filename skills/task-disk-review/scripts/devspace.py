@@ -67,7 +67,7 @@ def main():
         if arguments.manifest_output:
             if manifest is None:
                 raise ValueError("manifest output requires explicitly supplied opted-in helper-resource records")
-            write_manifest(arguments.manifest_output, manifest)
+            write_manifest(arguments.manifest_output, manifest, report["scope_roots"])
     except (ValueError, OSError, KeyError, TypeError, RecursionError):
         print("Review input/output unavailable or invalid; no cleanup occurred. Narrow scope or check selected JSON/paths.", file=sys.stderr)
         return 1

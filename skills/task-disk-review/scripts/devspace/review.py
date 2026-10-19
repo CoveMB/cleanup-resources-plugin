@@ -220,6 +220,9 @@ def review_task(selected, *, max_entries=2000, max_depth=12, timeout=10.0, cance
                             if not stat.S_ISREG(before.st_mode) or file_identity(before) != file_identity(metadata):
                                 unavailable(row["path"], "file identity changed before inspection", row)
                                 continue
+                            if mount_identity(file_descriptor) != root_mount:
+                                unavailable(row["path"], "file mount boundary; contents not inspected", row)
+                                continue
                             digest = hashlib.sha256()
                             while not stop_if_needed():
                                 chunk = os.read(file_descriptor, min(65536, max_content_bytes - content_bytes + 1))
