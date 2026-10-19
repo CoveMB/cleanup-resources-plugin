@@ -58,6 +58,8 @@ def main():
     try:
         assessment = read_document(arguments.assessment) if arguments.assessment else None
         manifest = read_document(arguments.manifest) if arguments.manifest else None
+        if arguments.manifest_output and manifest is None:
+            raise ValueError("manifest output requires explicitly supplied opted-in helper-resource records")
         report = review_scope(arguments.task or arguments.project, mode="task" if arguments.task else "project",
                               assessment=assessment, manifest=manifest, holds=arguments.hold, exclusions=arguments.exclude,
                               max_entries=arguments.max_entries, max_depth=arguments.max_depth, timeout=arguments.timeout,
@@ -65,8 +67,6 @@ def main():
         if arguments.plan_output:
             write_plan(arguments.plan_output, report["plan"])
         if arguments.manifest_output:
-            if manifest is None:
-                raise ValueError("manifest output requires explicitly supplied opted-in helper-resource records")
             write_manifest(arguments.manifest_output, manifest, report["scope_roots"])
     except (ValueError, OSError, KeyError, TypeError, RecursionError):
         print("Review input/output unavailable or invalid; no cleanup occurred. Narrow scope or check selected JSON/paths.", file=sys.stderr)

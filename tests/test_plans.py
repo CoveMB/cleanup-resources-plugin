@@ -244,6 +244,31 @@ class AssessedPlans(unittest.TestCase):
         plans.write_plan(self.records / "plan.json", plan)
         self.assertEqual(plans.read_document(self.records / "plan.json"), plan)
 
+    def test_manifest_prerequisite_preserves_output_paths_for_retry(self):
+        manifest = {"schema_version": 1, "resources": []}
+        source = self.records / "retry-manifest-input.json"
+        source.write_text(json.dumps(manifest))
+        plan_output = self.records / "retry-plan.json"
+        manifest_output = self.records / "retry-manifest.json"
+        command = [sys.executable, "-B", str(CLI), "review", "--task", str(self.project),
+                   "--plan-output", str(plan_output), "--manifest-output", str(manifest_output)]
+        before = self.bytes()
+        invalid = subprocess.run(command, capture_output=True, timeout=20)
+        self.assertEqual(invalid.returncode, 1)
+        self.assertEqual(invalid.stdout, b"")
+        self.assertNotIn(b"Traceback", invalid.stderr)
+        self.assertFalse(plan_output.exists())
+        self.assertFalse(manifest_output.exists())
+        self.assertEqual(self.bytes(), before)
+        retry = subprocess.run(command + ["--manifest", str(source)], capture_output=True, timeout=20)
+        self.assertIn(retry.returncode, (0, 2), retry.stderr)
+        self.assertEqual(retry.stderr, b"")
+        self.assertEqual(json.loads(plan_output.read_text())["kind"], "frozen-review-not-authorization")
+        self.assertEqual(json.loads(manifest_output.read_text()), manifest)
+        after = self.bytes()
+        self.assertEqual(set(after) - set(before), {"records/retry-plan.json", "records/retry-manifest.json"})
+        self.assertTrue(all(after[name] == contents for name, contents in before.items()))
+
     def test_manifest_output_cannot_modify_reviewed_roots(self):
         manifest = {"schema_version": 1, "resources": [{"path": str(self.project / "A"),
                     "origin": "helper-created", "purpose": "fixture", "association": "fixture-project",
