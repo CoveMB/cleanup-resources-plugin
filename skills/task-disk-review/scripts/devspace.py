@@ -46,6 +46,7 @@ def main():
     scope.add_argument("--global", dest="global_review", action="store_true", help="review configured development roots/providers")
     review.add_argument("--config", help="selected global configuration JSON; no implicit locations")
     review.add_argument("--assessment", help="agent-prepared contextual evidence JSON; never approval")
+    review.add_argument("--npm-cache", action="append", default=[], help="explicit optional npm cache root; bounded index discovery only")
     review.add_argument("--manifest", help="optional historical helper-resource JSON")
     review.add_argument("--manifest-output", help="opt-in exclusive copy of the supplied helper-resource manifest")
     review.add_argument("--plan-output", help="new plan file outside reviewed roots; never overwrites")
@@ -90,7 +91,7 @@ def main():
         print(json.dumps(result, ensure_ascii=True, indent=2))
         return 0 if result["outcome"] in {"completed", "cancelled", "reconciled-no-retry"} else 1
     try:
-        assessment = read_document(arguments.assessment, versions=(1, 2, 3)) if arguments.assessment else None
+        assessment = read_document(arguments.assessment, versions=(1, 2, 3, 4)) if arguments.assessment else None
         manifest = read_document(arguments.manifest) if arguments.manifest else None
         if arguments.manifest_output and manifest is None:
             raise ValueError("manifest output requires explicitly supplied opted-in helper-resource records")
@@ -101,6 +102,7 @@ def main():
             selected = arguments.task or arguments.project
         report = review_scope(selected, mode="global" if arguments.global_review else "task" if arguments.task else "project",
                               assessment=assessment, manifest=manifest, holds=arguments.hold, exclusions=arguments.exclude,
+                              npm_caches=arguments.npm_cache,
                               max_entries=arguments.max_entries, max_depth=arguments.max_depth, timeout=arguments.timeout,
                               max_content_bytes=arguments.max_content_bytes,
                               evidence_warn_bytes=arguments.evidence_warn_bytes, evidence_explain_bytes=arguments.evidence_explain_bytes)

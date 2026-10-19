@@ -79,7 +79,7 @@ def read_document(path, *, versions=(1,)):
     try:
         data, _ = _read_file(path)
         value = json.loads(data, object_pairs_hook=_unique_keys)
-        if not isinstance(value, dict) or value.get("schema_version") not in versions:
+        if not isinstance(value, dict) or type(value.get("schema_version")) is not int or value.get("schema_version") not in versions:
             raise ValueError("unsupported document schema")
         return value
     except (OSError, UnicodeError, json.JSONDecodeError, RecursionError):
@@ -163,6 +163,11 @@ def _expected_entries(entries):
 
 def _validate_assessment(assessment):
     """Shape/bounds only. This deliberately does not evaluate source prose."""
+    if not isinstance(assessment, dict) or type(assessment.get("schema_version")) is not int:
+        raise ValueError("assessment version must be an integer")
+    if isinstance(assessment, dict) and type(assessment.get("schema_version")) is int and assessment["schema_version"] == 4:
+        from .npm_cache import validate_assessment
+        return validate_assessment(assessment)
     if isinstance(assessment, dict) and assessment.get("schema_version") == 3:
         from .docker_cleanup import validate_assessment
         return validate_assessment(assessment)
@@ -377,7 +382,84 @@ def validate_manifest(manifest):
     return manifest
 
 
-def review_scope(selected, **options):
+def review_scope(selected, *, npm_caches=(), **options):
+    """Explicit optional cache discovery and v4 native selection, same journey."""
+    from . import npm_cache
+    deadline = time.monotonic() + options.get("timeout", 10.0)
+    assessment = options.get("assessment")
+    if assessment and assessment.get("schema_version") == 4:
+        _validate_assessment(assessment)
+        remaining = {**assessment, "schema_version": 3,
+                     "candidates": [row for row in assessment["candidates"] if not npm_cache.is_npm_cache(row)]}
+        report = _review_docker_scope(selected, **{**options, "assessment": remaining})
+        old = report["plan"]
+        content_remaining = max(0, old["policy"]["limits"]["max_content_bytes"] - report.get("content", {}).get("read_bytes", 0))
+        for specification in assessment["candidates"]:
+            if not npm_cache.is_npm_cache(specification):
+                continue
+            blocked = "npm cache held/excluded" if any(_overlap(Path(specification["npm"]["cache"]), Path(path))
+                       for path in (*old["policy"]["holds"], *old["policy"]["exclusions"])) else None
+            if options.get("mode") == "global" and selected.get("host_identity", report["host"]["identity"]) != report["host"]["identity"]:
+                blocked = "configured execution host differs"
+            protection = npm_cache.overlap_protection(specification, assessment, report["scope_roots"], options.get("manifest"))
+            if report["cancelled"] or report["invalid_scope"]:
+                raise ValueError("scope/cancellation prevents cache inspection")
+            try:
+                row = npm_cache.review(specification, assessment["references"], report["host"],
+                                            report["scope"]["canonical"], timeout=max(0.001, deadline - time.monotonic()),
+                                            max_entries=old["policy"]["limits"]["max_entries"],
+                                            max_content_bytes=content_remaining,
+                                            cancelled=options.get("cancelled"), blocked=blocked or (protection[1] if protection else None))
+                if protection and not blocked:
+                    row.update(assessment=protection[0], reason=protection[1])
+                report["candidates"].append(row)
+                if "native" in row:
+                    consumed = row["native"]["size"]["logical_bytes"]
+                    content_remaining -= consumed
+                    report["content"]["read_bytes"] += consumed
+            except npm_cache.InspectionCancelled:
+                report["cancelled"] = True
+                report["coverage"].update(complete=False, stop_reason="npm cache inspection cancelled")
+                break
+        freeze_review(report, assessment, options.get("manifest"), old["policy"]["holds"], old["policy"]["exclusions"], old["policy"]["limits"])
+        report["limitations"] = [item.replace("Package storage remains metadata-only.", "Explicit supported npm entries use native cleanup; aggregate package storage remains metadata-only.")
+                                 for item in report["limitations"]]
+    else:
+        report = _review_docker_scope(selected, **options)
+    cache_roots = [specification["npm"]["cache"] for specification in (assessment or {}).get("candidates", [])
+                   if npm_cache.is_npm_cache(specification)] + list(npm_caches)
+    for row in report["candidates"]:
+        if row.get("operation", "directory-remove") in {"directory-remove", "git-worktree-remove"} and any(
+                _overlap(Path(row["path"]), Path(cache)) for cache in cache_roots):
+            row.update(assessment="Keep", reason="selected npm cache state never enters directory/worktree removal")
+    if cache_roots:
+        report["plan"]["digest"] = digest({key: value for key, value in report["plan"].items() if key != "digest"})
+    if len(npm_caches) > 8:
+        raise ValueError("too many selected npm caches")
+    if npm_caches:
+        report["npm_caches"] = []
+        for cache in npm_caches:
+            if report["invalid_scope"] or report["cancelled"] or (options.get("mode") == "global" and selected.get("host_identity", report["host"]["identity"]) != report["host"]["identity"]):
+                report["npm_caches"].append({"cache": cache, "coverage": "skipped", "reason": "scope/host unavailable or cancelled", "entries": []})
+                continue
+            if any(_overlap(Path(cache), Path(path)) for path in (*report["plan"]["policy"]["holds"], *report["plan"]["policy"]["exclusions"])):
+                report["npm_caches"].append({"cache": cache, "coverage": "skipped", "reason": "held/excluded", "entries": []})
+                continue
+            try:
+                report["npm_caches"].append(npm_cache.inventory(cache, timeout=max(0.001, deadline - time.monotonic()),
+                                         max_entries=options.get("max_entries", 2000), cancelled=options.get("cancelled")))
+            except npm_cache.InspectionCancelled:
+                report["cancelled"] = True
+                report["coverage"].update(complete=False, stop_reason="npm cache inspection cancelled")
+                break
+            except (ValueError, OSError, KeyError, TypeError, npm_cache.InspectionUnavailable):
+                report["npm_caches"].append({"cache": cache, "coverage": "unavailable", "reason": "optional tool/cache inspection unsupported or incomplete", "entries": []})
+        if any(item["coverage"] != "examined" for item in report["npm_caches"]):
+            report["coverage"]["complete"] = False
+    return report
+
+
+def _review_docker_scope(selected, **options):
     """Version 3 adds separately typed provider rows; old producers stay intact."""
     assessment = options.get("assessment")
     if not assessment or assessment.get("schema_version") != 3:
@@ -618,7 +700,7 @@ def freeze_review(report, assessment, manifest, holds, exclusions, limits):
             plan["scope_identities"][root] = {key: file_identity(metadata)[key] for key in ("device", "inode", "mode")}
         except OSError:
             plan["scope_identities"][root] = None
-    if plan["schema_version"] in (2, 3):
+    if plan["schema_version"] in (2, 3, 4):
         for row in plan["candidates"]:
             row.setdefault("operation", "directory-remove")
     plan["digest"] = digest(plan)
@@ -630,17 +712,18 @@ def validate_selection(plan, selected_ids, *, host=None):
     """Validate frozen selection data only; any cleanup executor must independently revalidate current state."""
     payload = {key: value for key, value in plan.items() if key != "digest"}
     if (plan.get("digest") != digest(payload) or plan.get("kind") != "frozen-review-not-authorization"
-            or plan.get("schema_version") not in (1, 2, 3)):
+            or type(plan.get("schema_version")) is not int or plan.get("schema_version") not in (1, 2, 3, 4)):
         raise ValueError("changed or unsupported frozen plan")
     if plan["host"] != (host or new_report("", None, {})["host"]):
         raise ValueError("execution host differs")
-    if plan["schema_version"] in (2, 3):
+    if plan["schema_version"] in (2, 3, 4):
         from .docker_cleanup import OPERATIONS
+        from .npm_cache import OPERATION
         allowed = {"id", "path", "host", "category", "project", "purpose", "assessment", "reason", "effect",
                    "references", "comparison", "preconditions", "operation", "native", "observation",
                    "assessment_basis", "specification_digest", "agent_assessment"}
         for row in plan["candidates"]:
-            operations = {"directory-remove", "git-worktree-remove"} | (OPERATIONS if plan["schema_version"] == 3 else set())
+            operations = {"directory-remove", "git-worktree-remove"} | (OPERATIONS if plan["schema_version"] in (3, 4) else set()) | ({OPERATION} if plan["schema_version"] == 4 else set())
             if set(row) - allowed or row.get("operation") not in operations:
                 raise ValueError("unknown frozen resource fields/operation")
             if row["operation"] == "directory-remove" and "native" in row:
@@ -654,13 +737,17 @@ def validate_selection(plan, selected_ids, *, host=None):
         if row is None or row["assessment"] != "Eligible" or not row.get("observation", {}).get("complete"):
             raise ValueError("unknown or ineligible selection")
         from .docker_cleanup import is_docker, EFFECTS
-        if plan["schema_version"] == 3 and is_docker(row):
+        from .npm_cache import is_npm_cache
+        if plan["schema_version"] == 4 and is_npm_cache(row):
+            selected.append(row)
+            continue
+        if plan["schema_version"] in (3, 4) and is_docker(row):
             if row["effect"] != EFFECTS[row["operation"]] or row["host"] != plan["host"]:
                 raise ValueError("unsupported Docker effect/host")
             selected.append(row)
             continue
-        native = plan["schema_version"] in (2, 3) and row.get("operation") == "git-worktree-remove"
-        if plan["schema_version"] in (2, 3) and row.get("operation") not in {"directory-remove", "git-worktree-remove"}:
+        native = plan["schema_version"] in (2, 3, 4) and row.get("operation") == "git-worktree-remove"
+        if plan["schema_version"] in (2, 3, 4) and row.get("operation") not in {"directory-remove", "git-worktree-remove"}:
             raise ValueError("unknown typed operation")
         path = Path(row["path"])
         if (str(path) != os.path.abspath(path) or not any(_inside(path, Path(root)) for root in plan["scope_roots"])
@@ -672,7 +759,7 @@ def validate_selection(plan, selected_ids, *, host=None):
         valid_effect = row["effect"] == EFFECT if native else row["effect"].startswith("permanent removal of this exact directory;")
         if not valid_effect or row["host"] != plan["host"]:
             raise ValueError("unsupported effect/host")
-        if any(not is_docker(other) and _overlap(path, Path(other["path"])) for other in selected):
+        if any(not is_docker(other) and not is_npm_cache(other) and _overlap(path, Path(other["path"])) for other in selected):
             raise ValueError("overlapping selected targets")
         if _evidence_conflict(row, row) or any(_evidence_conflict(row, other) for other in selected):
             raise ValueError("selected target contains another selection's evidence or rebuild inputs")
@@ -681,20 +768,23 @@ def validate_selection(plan, selected_ids, *, host=None):
     # Per-item reassessment alone would drop already processed obligations.
     for row in selected:
         if any(_inside(Path(reference["path"]), Path(target["path"]))
-               for reference in row.get("references", {}).values() for target in selected if not is_docker(target)):
+               for reference in row.get("references", {}).values() for target in selected if not is_docker(target) and not is_npm_cache(target)):
             raise ValueError("selected batch contains required evidence/rebuild inputs")
-    if plan["schema_version"] in (2, 3):
+    if plan["schema_version"] in (2, 3, 4):
         context = plan["review_context"]
         if context["mode"] in {"task", "project"} and any(
-                _inside(Path(context["selected"]), Path(target["path"])) for target in selected if not is_docker(target)):
+                _inside(Path(context["selected"]), Path(target["path"])) for target in selected if not is_docker(target) and not is_npm_cache(target)):
             raise ValueError("selected target contains required review context; review from a retained repository checkout")
         for row in plan["candidates"]:
             if row.get("operation") == "git-worktree-remove" and "native" in row:
                 if any(_inside(Path(row["native"][key]), Path(target["path"]))
-                       for key in ("repository", "common_directory", "administration") for target in selected if not is_docker(target)):
+                       for key in ("repository", "common_directory", "administration") for target in selected if not is_docker(target) and not is_npm_cache(target)):
                     raise ValueError("selected batch contains required native repository/recovery state")
-    if plan["schema_version"] == 3:
+    if plan["schema_version"] in (3, 4):
         from .docker_cleanup import validate_batch
+        validate_batch(plan, selected)
+    if plan["schema_version"] == 4:
+        from .npm_cache import validate_batch
         validate_batch(plan, selected)
     return selected
 

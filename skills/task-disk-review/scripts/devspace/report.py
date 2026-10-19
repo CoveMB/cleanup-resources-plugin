@@ -167,8 +167,17 @@ def render_text(report):
     lines.extend(report["warnings"])
     for entry in report["entries"]:
         lines.append(f"{entry['assessment']} | {quote(entry['path'])} | {entry['coverage']} | {entry['reason']}")
-    for row in report.get("candidates", []):
+    ranked = sorted(report.get("candidates", []), key=lambda row: (
+        row["assessment"] != "Eligible", -((row.get("observation", {}).get("size", {}).get("allocated_bytes")
+        or row.get("observation", {}).get("size", {}).get("logical_bytes")
+        or row.get("observation", {}).get("provider_size_bytes_estimate") or 0))))
+    for row in ranked:
         lines.append(f"{row['assessment']} | ID {row['id']} | {quote(row['path'])} | {row['reason']}")
+        lines.append("Decision: " + ("Remove after exact confirmation" if row["assessment"] == "Eligible" else "Keep pending evidence" if row["assessment"] in {"Review", "Unavailable"} else "Keep")
+                     + " | Purpose: " + quote(row.get("purpose")))
+        if "size" in row.get("observation", {}):
+            observed = row["observation"]["size"]
+            lines.append(f"Estimate: {observed['logical_bytes']} logical bytes; {observed['allocated_bytes']} allocated bytes; not guaranteed net recovery")
         if "provider_size_bytes_estimate" in row.get("observation", {}):
             lines.append(f"Provider estimate: {row['observation']['provider_size_bytes_estimate']} bytes; host recovery unknown")
         if row.get("assessment_basis"):
@@ -176,6 +185,14 @@ def render_text(report):
         if row.get("comparison"):
             lines.append("Content comparison: " + quote(row["comparison"]))
         lines.append("Effect: " + row["effect"])
+    for cache in report.get("npm_caches", []):
+        lines.append("Npm cache coverage: " + quote(cache["cache"]) + " | " + cache["coverage"])
+        if "unique_content_bytes" in cache:
+            lines.append(f"Unique indexed logical bytes: {cache['unique_content_bytes']}; separate estimate, not additive host savings")
+        for entry in cache["entries"]:
+            lines.append(f"{entry['assessment']} | {entry['logical_bytes']} bytes | {quote(entry['key'])} | {entry['reason']}")
+            lines.append("Consequence: " + entry["consequences"])
+        lines.append(cache.get("accounting", cache.get("reason", "unknown")))
     if "git" in report:
         for row in report["git"]["worktrees"]:
             lines.append("Report-only worktree: " + quote(row))
