@@ -182,6 +182,7 @@ def _validate_assessment(assessment):
         if not isinstance(reference["path"], str) or not Path(reference["path"]).is_absolute() or not isinstance(reference["sha256"], str):
             raise ValueError("reference requires absolute path and digest")
     for candidate in candidates:
+        fields(candidate, {"path", "category", "purpose", "content", "recovery", "consumers", "consumer_scope", "release", "findings", "observed_tree_digest"} | ({"operation", "worktree"} if assessment["schema_version"] == 2 else set()))
         native = assessment["schema_version"] == 2 and candidate.get("operation") == "git-worktree-remove"
         if assessment["schema_version"] == 2:
             if candidate.get("operation") not in {"directory-remove", "git-worktree-remove"}:
@@ -195,7 +196,6 @@ def _validate_assessment(assessment):
                 strings(operation["basis"])
             elif "worktree" in candidate:
                 raise ValueError("directory cannot carry native worktree fields")
-        fields(candidate, {"path", "category", "purpose", "content", "recovery", "consumers", "consumer_scope", "release", "findings", "observed_tree_digest"} | ({"operation", "worktree"} if assessment["schema_version"] == 2 else set()))
         if not isinstance(candidate.get("path"), str) or not candidate["path"]:
             raise ValueError("candidate path required")
         if not isinstance(candidate.get("category", "unknown"), str) or not isinstance(candidate.get("purpose", ""), str):

@@ -19,6 +19,32 @@ import test_plans
 from devspace import cleanup, plans
 
 
+class TypedAssessmentValidation(unittest.TestCase):
+    def test_nonobject_candidates_refuse_without_traceback_or_output(self):
+        with tempfile.TemporaryDirectory(prefix="assessment-shape-fixture-") as temporary:
+            base = Path(temporary).resolve()
+            task = base / "task"
+            task.mkdir()
+            sentinel = task / "retained.txt"
+            sentinel.write_bytes(b"preserved input")
+            assessment = base / "assessment.json"
+            output = base / "plan.json"
+            for version in (1, 2):
+                for candidate in (None, "candidate", [], 3, True):
+                    with self.subTest(version=version, candidate=candidate):
+                        assessment.write_text(json.dumps({"schema_version": version,
+                            "references": {}, "candidates": [candidate]}))
+                        result = subprocess.run([sys.executable, "-B", str(test_plans.CLI),
+                            "review", "--task", str(task), "--assessment", str(assessment),
+                            "--plan-output", str(output)], capture_output=True, text=True, timeout=15)
+                        self.assertEqual(result.returncode, 1)
+                        self.assertIn("Review input/output unavailable or invalid", result.stderr)
+                        self.assertNotIn("Traceback", result.stderr)
+                        self.assertEqual(result.stdout, "")
+                        self.assertFalse(output.exists())
+                        self.assertEqual(sentinel.read_bytes(), b"preserved input")
+
+
 class NativeWorktreeCleanup(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="native-worktree-fixture-")
@@ -229,6 +255,70 @@ class NativeWorktreeCleanup(unittest.TestCase):
         self.assertEqual(result["outcome"], "completed", result)
         self.assertFalse(directory.exists())
         self.assertFalse(self.worktrees[0].exists()); self.assertFalse(self.worktrees[1].exists())
+        self.retained()
+
+    def test_mixed_batch_preserves_cross_target_evidence_before_state_or_confirmation(self):
+        fixture = test_plans.AssessedPlans()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        directory = self.repository / "generated"
+        directory.mkdir()
+        (directory / "data.txt").write_bytes(b"ordinary fixture library\n")
+        (directory / "data.txt").chmod(0o644)
+        directory_specification = copy.deepcopy(fixture.specifications[0])
+        directory_specification.update(path=str(directory), operation="directory-remove")
+        for claim in [directory_specification[key] for key in
+                      ("content", "recovery", "consumer_scope", "release")] + directory_specification["consumers"]:
+            claim["basis"] = ["directory-decision" if key == "decision" else key for key in claim["basis"]]
+        references = {**fixture.references, **self.references, "directory-decision": fixture.references["decision"]}
+        config = {"schema_version": 1, "roots": [str(self.base)]}
+        config_path = self.records / "config.json"
+        config_path.write_text(json.dumps(config))
+        for mode in ("project", "global"):
+            for dependent in ("directory", "worktree"):
+                with self.subTest(mode=mode, dependent=dependent):
+                    native, ordinary = copy.deepcopy(self.specifications[0]), copy.deepcopy(directory_specification)
+                    source = self.worktrees[0] / "source.txt" if dependent == "directory" else directory / "data.txt"
+                    references["selected-input"] = {"path": str(source), "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
+                    if dependent == "directory":
+                        ordinary["recovery"]["inputs"].append("selected-input")
+                    else:
+                        native["content"]["basis"].append("selected-input")
+                    assessment = {"schema_version": 2, "references": references, "candidates": [native, ordinary]}
+                    scope = config if mode == "global" else self.repository
+                    independent = []
+                    for specification in assessment["candidates"]:
+                        single = plans.review_scope(scope, mode=mode,
+                            assessment={**assessment, "candidates": [specification]}, timeout=30)
+                        row = next(row for row in single["candidates"] if row["path"] == specification["path"])
+                        self.assertEqual(row["assessment"], "Eligible", row.get("reason"))
+                        plans.validate_selection(single["plan"], [row["id"]])
+                        independent.append(row)
+                    combined = plans.review_scope(scope, mode=mode, assessment=assessment, timeout=30)
+                    rows = [row for row in combined["candidates"] if row["path"] in {str(directory), str(self.worktrees[0])}]
+                    self.assertEqual([row["assessment"] for row in rows], ["Review", "Review"])
+                    for root_review in combined.get("root_reviews", []):
+                        payload = {key: value for key, value in root_review["plan"].items() if key != "digest"}
+                        self.assertEqual(root_review["plan"]["digest"], plans.digest(payload))
+                    legacy = copy.deepcopy(combined["plan"])
+                    legacy["candidates"] = independent
+                    legacy["digest"] = plans.digest({key: value for key, value in legacy.items() if key != "digest"})
+                    self.plan_path.write_text(json.dumps(legacy))
+                    self.assessment_path.write_text(json.dumps(assessment))
+                    for selected in (independent, independent[::-1]):
+                        identifiers = [row["id"] for row in selected]
+                        with self.assertRaisesRegex(ValueError, "evidence|rebuild"):
+                            plans.validate_selection(legacy, identifiers)
+                        if sys.platform == "darwin":
+                            with patch.object(cleanup, "_state_path", return_value=self.state_path), \
+                                    patch.object(cleanup, "_revalidate", side_effect=AssertionError("conflict reached revalidation")), \
+                                    patch.object(cleanup, "_confirm", side_effect=AssertionError("conflict reached confirmation")):
+                                with self.assertRaisesRegex(ValueError, "evidence|rebuild"):
+                                    cleanup.apply(self.plan_path, self.assessment_path, identifiers,
+                                                  config_path=config_path if mode == "global" else None)
+                    self.assertFalse(self.state_path.exists())
+                    self.assertEqual((directory / "data.txt").read_bytes(), b"ordinary fixture library\n")
+                    self.assertEqual((self.worktrees[0] / "source.txt").read_bytes(), b"retained tracked source\n")
         self.retained()
 
     @unittest.skipUnless(sys.platform == "darwin", "macOS/APFS mutation")
