@@ -2,7 +2,7 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "cleanup-resources-plugin",
   "version": "0.1.0",
-  "description": "Task/project/global disk review and a human-operated exact-directory cleanup helper.",
+  "description": "Task/project/global disk review and human-operated selected directory, Git worktree, local Docker and supported npm cache cleanup.",
   "extensions": {
     "com.openai": {
       "interface": {

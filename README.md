@@ -1,6 +1,6 @@
 # Cleanup Resources Plugin
 
-Task/project/global development disk review through one Codex skill and a standalone Python helper. Reviews produce assessed frozen plans. Separately confirmed cleanup supports exact eligible directories, ordinary linked Git worktrees, selected local Docker resources and supported singleton npm cache entries on tested local macOS/APFS capabilities. The agent stops after review; the user operates cleanup in their own terminal. Installed combined cleanup and a new human pilot remain unverified.
+Task/project/global development disk review through one Codex skill and a standalone Python helper. Reviews produce assessed frozen plans. Separately confirmed cleanup supports exact eligible directories, ordinary linked Git worktrees, selected local Docker resources and supported singleton npm cache entries on tested local macOS/APFS capabilities. The agent stops after review; the user operates cleanup in their own terminal. Installed observations apply only to their identified runtime subject. Start with a prioritized read-only review; selected cleanup and practical outcomes are recorded only when actually performed.
 
 ## Run a review
 
