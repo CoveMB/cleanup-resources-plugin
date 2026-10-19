@@ -68,6 +68,8 @@ def validate_assessment(assessment):
         raise ValueError("candidate limit")
     filesystem, seen = [], set()
     for specification in assessment["candidates"]:
+        if not isinstance(specification, dict):
+            raise ValueError("unsupported assessment fields")
         if not is_docker(specification):
             filesystem.append(specification)
             continue

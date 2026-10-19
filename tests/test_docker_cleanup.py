@@ -380,6 +380,38 @@ class DockerContracts(unittest.TestCase):
         self.assertTrue(eligible)
         self.assertTrue(plans.validate_selection(report["plan"], eligible))
 
+    def test_mixed_batch_preserves_checked_docker_evidence_through_aliases(self):
+        fixture = test_plans.AssessedPlans(); fixture.setUp(); self.addCleanup(fixture.doCleanups)
+        directory_report = fixture.review()
+        directory = copy.deepcopy(next(row for row in directory_report["candidates"]
+                                       if row["path"] == str(fixture.project / "A")))
+        with patch.object(docker_cleanup, "LocalDocker", InspectedDocker):
+            base, pp, ap, report = self.assessed()
+        native = copy.deepcopy(report["candidates"][0])
+        alias = fixture.base / "selected-alias"
+        alias.symlink_to(fixture.project / "A", target_is_directory=True)
+        before = (fixture.project / "A/data.txt").read_bytes()
+        for reference_path in (fixture.project / "A/data.txt", alias / "data.txt"):
+            with self.subTest(reference_path=reference_path):
+                candidate = copy.deepcopy(native)
+                candidate["references"]["checked-evidence"] = {"path": str(reference_path),
+                    "sha256": plans.hashlib.sha256(before).hexdigest()}
+                combined = copy.deepcopy(directory_report)
+                combined["candidates"] = [copy.deepcopy(directory), candidate]
+                assessment = {"schema_version": 3, "references": {}, "candidates": []}
+                plans.freeze_review(combined, assessment, None, [], [], directory_report["plan"]["policy"]["limits"])
+                self.assertTrue(all(row["assessment"] == "Review" for row in combined["candidates"]))
+                # An older frozen batch must also refuse both execution orders.
+                plan = combined["plan"]
+                for row in plan["candidates"]:
+                    row["assessment"] = "Eligible"
+                plan["digest"] = plans.digest({key: value for key, value in plan.items() if key != "digest"})
+                identifiers = [row["id"] for row in plan["candidates"]]
+                for order in (identifiers, list(reversed(identifiers))):
+                    with self.subTest(order=order), self.assertRaisesRegex(ValueError, "evidence|rebuild"):
+                        plans.validate_selection(plan, order)
+        self.assertEqual((fixture.project / "A/data.txt").read_bytes(), before)
+
 
 if __name__ == "__main__":
     unittest.main()

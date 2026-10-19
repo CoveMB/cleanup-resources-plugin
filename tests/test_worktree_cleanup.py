@@ -29,7 +29,7 @@ class TypedAssessmentValidation(unittest.TestCase):
             sentinel.write_bytes(b"preserved input")
             assessment = base / "assessment.json"
             output = base / "plan.json"
-            for version in (1, 2):
+            for version in (1, 2, 3):
                 for candidate in (None, "candidate", [], 3, True):
                     with self.subTest(version=version, candidate=candidate):
                         assessment.write_text(json.dumps({"schema_version": version,
