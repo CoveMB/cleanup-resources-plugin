@@ -113,7 +113,7 @@ def local_filesystem(descriptor):
 
 
 def review_task(selected, *, max_entries=2000, max_depth=12, timeout=10.0, cancelled=None,
-                inspect_content=False, max_content_bytes=256 * 1024 * 1024, exclusions=()):
+                inspect_content=False, max_content_bytes=256 * 1024 * 1024, exclusions=(), worktree_marker=None):
     selected = os.path.abspath(os.fspath(selected))
     report = new_report(selected, None, {"max_entries": max_entries, "max_depth": max_depth, "timeout_seconds": timeout})
     coverage, size = report["coverage"], report["size"]
@@ -192,6 +192,13 @@ def review_task(selected, *, max_entries=2000, max_depth=12, timeout=10.0, cance
                 if not stat.S_ISLNK(metadata.st_mode) and any(path_inside(full_path, root) for root in excluded):
                     row.update(assessment="Keep")
                     skip(row, "excluded filesystem alias; contents not enumerated")
+                    continue
+                # Native Git inspection supplies the independently verified linked
+                # root marker identity. Never inspect its payload as checkout data.
+                # Generic directory inspection supplies no exception.
+                if (worktree_marker is not None and path.as_posix() == ".git"
+                        and stat.S_ISREG(metadata.st_mode) and file_identity(metadata) == worktree_marker):
+                    row.update(kind="worktree-metadata", identity=worktree_marker)
                     continue
                 reason, private_directory = protection(entry.name, inherited_keep)
                 if reason:

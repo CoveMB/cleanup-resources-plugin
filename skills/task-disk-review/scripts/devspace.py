@@ -37,7 +37,7 @@ def main():
     if sys.version_info < (3, 12):
         print("Python 3.12 or later is required.", file=sys.stderr)
         return 1
-    parser = argparse.ArgumentParser(description="Task/project/global review and separately confirmed exact local directory cleanup.")
+    parser = argparse.ArgumentParser(description="Task/project/global review and separately confirmed selected directory/native Git worktree cleanup.")
     commands = parser.add_subparsers(dest="command", required=True)
     review = commands.add_parser("review", help="review a selected task; never deletes")
     scope = review.add_mutually_exclusive_group(required=True)
@@ -58,7 +58,7 @@ def main():
     review.add_argument("--max-content-bytes", type=integer_in_range(1, 2**40), default=256 * 1024 * 1024)
     review.add_argument("--evidence-warn-bytes", type=integer_in_range(1, 2**40), default=EVIDENCE_WARN_BYTES, help="advisory logical packet size; strictly above warns")
     review.add_argument("--evidence-explain-bytes", type=integer_in_range(1, 2**40), default=EVIDENCE_EXPLAIN_BYTES, help="strictly above requests contextual explanation; never eligibility")
-    apply = commands.add_parser("apply", help="user's own terminal only; permanent exact-directory removal")
+    apply = commands.add_parser("apply", help="user's own terminal only; permanent selected directory/native worktree removal")
     apply.add_argument("--plan", required=True)
     apply.add_argument("--assessment", help="original agent-prepared assessment; not approval")
     apply.add_argument("--manifest", help="original historical manifest, if supplied during review")
@@ -90,7 +90,7 @@ def main():
         print(json.dumps(result, ensure_ascii=True, indent=2))
         return 0 if result["outcome"] in {"completed", "cancelled", "reconciled-no-retry"} else 1
     try:
-        assessment = read_document(arguments.assessment) if arguments.assessment else None
+        assessment = read_document(arguments.assessment, versions=(1, 2)) if arguments.assessment else None
         manifest = read_document(arguments.manifest) if arguments.manifest else None
         if arguments.manifest_output and manifest is None:
             raise ValueError("manifest output requires explicitly supplied opted-in helper-resource records")

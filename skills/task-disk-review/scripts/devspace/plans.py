@@ -75,11 +75,11 @@ def _read_file(path, limit=DOCUMENT_LIMIT, deadline=None):
         os.close(descriptor)
 
 
-def read_document(path):
+def read_document(path, *, versions=(1,)):
     try:
         data, _ = _read_file(path)
         value = json.loads(data, object_pairs_hook=_unique_keys)
-        if not isinstance(value, dict) or value.get("schema_version") != 1:
+        if not isinstance(value, dict) or value.get("schema_version") not in versions:
             raise ValueError("unsupported document schema")
         return value
     except (OSError, UnicodeError, json.JSONDecodeError, RecursionError):
@@ -171,7 +171,7 @@ def _validate_assessment(assessment):
         if not isinstance(value, list) or len(value) > 128 or not all(isinstance(item, str) and len(item) <= 4096 for item in value):
             raise ValueError("unsupported assessment list")
 
-    if not isinstance(assessment, dict) or set(assessment) != {"schema_version", "references", "candidates"} or assessment["schema_version"] != 1:
+    if not isinstance(assessment, dict) or set(assessment) != {"schema_version", "references", "candidates"} or assessment["schema_version"] not in (1, 2):
         raise ValueError("unsupported assessment; status/approval flags are not accepted")
     references, candidates = assessment["references"], assessment["candidates"]
     if not isinstance(references, dict) or len(references) > 128 or not isinstance(candidates, list) or len(candidates) > MAX_CANDIDATES:
@@ -182,7 +182,20 @@ def _validate_assessment(assessment):
         if not isinstance(reference["path"], str) or not Path(reference["path"]).is_absolute() or not isinstance(reference["sha256"], str):
             raise ValueError("reference requires absolute path and digest")
     for candidate in candidates:
-        fields(candidate, {"path", "category", "purpose", "content", "recovery", "consumers", "consumer_scope", "release", "findings", "observed_tree_digest"})
+        native = assessment["schema_version"] == 2 and candidate.get("operation") == "git-worktree-remove"
+        if assessment["schema_version"] == 2:
+            if candidate.get("operation") not in {"directory-remove", "git-worktree-remove"}:
+                raise ValueError("unknown typed operation")
+            if native:
+                operation = candidate.get("worktree")
+                if (not isinstance(operation, dict) or set(operation) != {"repository", "retained_ref", "lifecycle", "basis"}
+                        or not isinstance(operation["repository"], str) or not Path(operation["repository"]).is_absolute()
+                        or not isinstance(operation["retained_ref"], str) or operation["lifecycle"] not in {"git", "codex", "unknown"}):
+                    raise ValueError("unsupported worktree lifecycle assessment")
+                strings(operation["basis"])
+            elif "worktree" in candidate:
+                raise ValueError("directory cannot carry native worktree fields")
+        fields(candidate, {"path", "category", "purpose", "content", "recovery", "consumers", "consumer_scope", "release", "findings", "observed_tree_digest"} | ({"operation", "worktree"} if assessment["schema_version"] == 2 else set()))
         if not isinstance(candidate.get("path"), str) or not candidate["path"]:
             raise ValueError("candidate path required")
         if not isinstance(candidate.get("category", "unknown"), str) or not isinstance(candidate.get("purpose", ""), str):
@@ -294,7 +307,18 @@ def _assess(row, specification, references, snapshot, historical, deadline):
             raise ValueError("extra, missing, modified or differently typed target contents")
         recovery = specification.get("recovery", {})
         basis(recovery)
-        if recovery.get("kind") == "rebuild":
+        if row.get("operation") == "git-worktree-remove":
+            from .git_worktree import EFFECT
+            basis(specification["worktree"])
+            if recovery.get("kind") != "retained-commit":
+                raise ValueError("native worktree requires retained branch resume evidence")
+            if row["native"]["ignored"]:
+                if not recovery.get("inputs") or not recovery.get("explanation"):
+                    raise ValueError("ignored generated contents need separate recovery evidence")
+                for identifier in recovery["inputs"]:
+                    reference(identifier)
+            row["effect"] = EFFECT
+        elif recovery.get("kind") == "rebuild":
             if not recovery.get("inputs"):
                 raise ValueError("rebuild inputs unknown")
             for identifier in recovery["inputs"]:
@@ -319,7 +343,7 @@ def _assess(row, specification, references, snapshot, historical, deadline):
             raise ValueError("historical multiple consumers remain unresolved")
         release = specification.get("release", {})
         basis(release)
-        if not release.get("checkpoint") or not specification.get("purpose") or row["category"] not in {"output", "dependencies"}:
+        if not release.get("checkpoint") or not specification.get("purpose") or row["category"] not in ({"worktree"} if row.get("operation") == "git-worktree-remove" else {"output", "dependencies"}):
             raise ValueError("purpose/category/release checkpoint unresolved")
         row.update(assessment="Eligible", reason="complete comparison and evidence-backed content/use/release/recovery assessment")
     except (ValueError, KeyError, TypeError, OSError, UnicodeError, RecursionError):
@@ -412,7 +436,7 @@ def review_scope(selected, *, mode="task", assessment=None, manifest=None, holds
     for specification in specifications:
         if report["cancelled"]:
             break
-        if set(specification) - {"path", "category", "purpose", "content", "recovery", "consumers", "consumer_scope", "release", "findings", "observed_tree_digest"}:
+        if set(specification) - {"path", "category", "purpose", "content", "recovery", "consumers", "consumer_scope", "release", "findings", "observed_tree_digest", "operation", "worktree"}:
             raise ValueError("unsupported candidate assertion/status/approval field")
         path = Path(os.path.abspath(roots[0] / specification["path"]))
         if str(path) in seen:
@@ -423,17 +447,36 @@ def review_scope(selected, *, mode="task", assessment=None, manifest=None, holds
                "purpose": specification.get("purpose"), "assessment": "Review", "reason": "not assessed",
                "effect": "report only; no removal authorized", "references": {}, "comparison": None,
                "preconditions": ["same host/target/content/evidence/consumer/release conditions", "new plan on material drift", "separate exact-plan human confirmation"]}
+        typed = assessment["schema_version"] == 2
+        native = typed and specification["operation"] == "git-worktree-remove"
+        if typed:
+            row["operation"] = specification["operation"]
+        if native:
+            row["id"] = digest({"operation": row["operation"], "path": str(path)})[:16]
         report["candidates"].append(row)
-        if (not any(_inside(path, root) for root in roots) or any(_same_path(path, root) for root in roots) or _same_path(path, Path.home())
+        if (not any(_inside(path, root) for root in roots) or (not native and any(_same_path(path, root) for root in roots)) or _same_path(path, Path.home())
                 or os.path.ismount(path) or any(_overlap(path, Path(os.path.abspath(value))) for value in (*holds, *exclusions))):
             row.update(assessment="Keep", reason="protected root/ancestor, hold, exclusion or outside selected scope")
             continue
+        native_state = None
+        if native:
+            from . import git_worktree
+            operation = specification["worktree"]
+            try:
+                if operation["lifecycle"] != "git":
+                    raise ValueError("owning Codex/unknown lifecycle and resume interface unavailable")
+                native_state = git_worktree.inspect(operation["repository"], str(path), operation["retained_ref"], timeout=remaining(), cancelled=cancelled)
+                row["native"] = native_state
+            except (ValueError, OSError) as error:
+                row.update(assessment="Unavailable", reason=str(error))
+                continue
         if content_bytes_remaining <= 0 or content_entries_remaining <= 0:
             row.update(assessment="Unavailable", reason="global/candidate content inspection budget exhausted; remaining contents unknown")
             report["coverage"]["complete"] = False
             continue
         snapshot = review_task(path, inspect_content=True, max_content_bytes=content_bytes_remaining, timeout=remaining(),
-                               exclusions=exclusions, cancelled=cancelled, max_entries=content_entries_remaining, max_depth=max_depth)
+                               exclusions=exclusions, cancelled=cancelled, max_entries=content_entries_remaining, max_depth=max_depth,
+                               worktree_marker=native_state["marker_identity"] if native_state else None)
         content_entries_remaining -= snapshot["coverage"]["examined"]
         content_bytes_read += snapshot["content"]["read_bytes"]
         content_bytes_remaining = max(0, content_bytes_remaining - snapshot["content"]["read_bytes"])
@@ -514,7 +557,7 @@ def freeze_review(report, assessment, manifest, holds, exclusions, limits):
                              if item.startswith("Reports contain host and selected/relative path metadata;") else item
                              for item in report["limitations"]]
     report["limitations"].append("Assessed eligibility includes agent interpretation, not semantic certification by this helper. Frozen review data is not authorization; apply requires fresh interactive confirmation and revalidation.")
-    plan = {"schema_version": 1, "kind": "frozen-review-not-authorization", "host": report["host"],
+    plan = {"schema_version": assessment["schema_version"] if assessment else 1, "kind": "frozen-review-not-authorization", "host": report["host"],
             "scope_roots": report["scope_roots"], "candidates": report["candidates"],
             "assessment_digest": digest(assessment), "manifest_digest": digest(manifest),
             "policy": {"holds": [os.path.abspath(value) for value in holds],
@@ -528,6 +571,9 @@ def freeze_review(report, assessment, manifest, holds, exclusions, limits):
             plan["scope_identities"][root] = {key: file_identity(metadata)[key] for key in ("device", "inode", "mode")}
         except OSError:
             plan["scope_identities"][root] = None
+    if plan["schema_version"] == 2:
+        for row in plan["candidates"]:
+            row.setdefault("operation", "directory-remove")
     plan["digest"] = digest(plan)
     report["plan"] = plan
     return report
@@ -537,10 +583,19 @@ def validate_selection(plan, selected_ids, *, host=None):
     """Validate frozen selection data only; any cleanup executor must independently revalidate current state."""
     payload = {key: value for key, value in plan.items() if key != "digest"}
     if (plan.get("digest") != digest(payload) or plan.get("kind") != "frozen-review-not-authorization"
-            or plan.get("schema_version") != 1):
+            or plan.get("schema_version") not in (1, 2)):
         raise ValueError("changed or unsupported frozen plan")
     if plan["host"] != (host or new_report("", None, {})["host"]):
         raise ValueError("execution host differs")
+    if plan["schema_version"] == 2:
+        allowed = {"id", "path", "host", "category", "project", "purpose", "assessment", "reason", "effect",
+                   "references", "comparison", "preconditions", "operation", "native", "observation",
+                   "assessment_basis", "specification_digest", "agent_assessment"}
+        for row in plan["candidates"]:
+            if set(row) - allowed or row.get("operation") not in {"directory-remove", "git-worktree-remove"}:
+                raise ValueError("unknown frozen resource fields/operation")
+            if row["operation"] == "directory-remove" and "native" in row:
+                raise ValueError("directory cannot carry native identity")
     rows = {row["id"]: row for row in plan["candidates"]}
     if len(rows) != len(plan["candidates"]) or not selected_ids or len(set(selected_ids)) != len(selected_ids):
         raise ValueError("invalid selection IDs")
@@ -549,19 +604,34 @@ def validate_selection(plan, selected_ids, *, host=None):
         row = rows.get(identifier)
         if row is None or row["assessment"] != "Eligible" or not row.get("observation", {}).get("complete"):
             raise ValueError("unknown or ineligible selection")
+        native = plan["schema_version"] == 2 and row.get("operation") == "git-worktree-remove"
+        if plan["schema_version"] == 2 and row.get("operation") not in {"directory-remove", "git-worktree-remove"}:
+            raise ValueError("unknown typed operation")
         path = Path(row["path"])
         if (str(path) != os.path.abspath(path) or not any(_inside(path, Path(root)) for root in plan["scope_roots"])
-                or any(_same_path(path, Path(root)) for root in plan["scope_roots"])
+                or (not native and any(_same_path(path, Path(root)) for root in plan["scope_roots"]))
                 or _same_path(path, Path.home()) or os.path.ismount(path)
                 or any(protection(part)[1] for part in path.parts)):
             raise ValueError("protected or uncontained target")
-        if not row["effect"].startswith("permanent removal of this exact directory;") or row["host"] != plan["host"]:
+        from .git_worktree import EFFECT
+        valid_effect = row["effect"] == EFFECT if native else row["effect"].startswith("permanent removal of this exact directory;")
+        if not valid_effect or row["host"] != plan["host"]:
             raise ValueError("unsupported effect/host")
         if any(_overlap(path, Path(other["path"])) for other in selected):
             raise ValueError("overlapping selected targets")
         if _evidence_conflict(row, row) or any(_evidence_conflict(row, other) for other in selected):
             raise ValueError("selected target contains another selection's evidence or rebuild inputs")
         selected.append(row)
+    if plan["schema_version"] == 2:
+        context = plan["review_context"]
+        if context["mode"] in {"task", "project"} and any(
+                _inside(Path(context["selected"]), Path(target["path"])) for target in selected):
+            raise ValueError("selected target contains required review context; review from a retained repository checkout")
+        for row in plan["candidates"]:
+            if row.get("operation") == "git-worktree-remove" and "native" in row:
+                if any(_inside(Path(row["native"][key]), Path(target["path"]))
+                       for key in ("repository", "common_directory", "administration") for target in selected):
+                    raise ValueError("selected batch contains required native repository/recovery state")
     return selected
 
 

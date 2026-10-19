@@ -157,7 +157,7 @@ class State:
 
 
 def _load_plan(path, selected_ids, all_eligible=False):
-    plan = plans.read_document(path)
+    plan = plans.read_document(path, versions=(1, 2))
     if set(plan) != PLAN_FIELDS or set(plan["review_context"]) != {"mode", "selected"}:
         raise ValueError("unsupported frozen plan; regenerate review with this helper")
     if all_eligible:
@@ -167,7 +167,9 @@ def _load_plan(path, selected_ids, all_eligible=False):
     selected = plans.validate_selection(plan, selected_ids)
     for row in selected:
         target = Path(row["path"])
-        if (any(plans._inside(Path(root), target) for root in plan["scope_roots"])
+        native = plan["schema_version"] == 2 and row.get("operation") == "git-worktree-remove"
+        if (any(plans._inside(Path(root), target) and not (native and plans._same_path(Path(root), target))
+                for root in plan["scope_roots"])
                 or any(plans._overlap(target, Path(root)) for root in (*plan["policy"]["holds"], *plan["policy"]["exclusions"]))):
             raise ValueError("protected root/ancestor or policy overlap")
     return plan, selected
@@ -178,21 +180,32 @@ def _confirm(plan, selected):
         raise ValueError("use your own interactive terminal; piped input refused")
     binding = {"plan_digest": plan["digest"], "host": plan["host"],
                "targets": [{key: row[key] for key in ("id", "path", "effect", "preconditions", "observation")} for row in selected]}
+    if plan["schema_version"] == 2:
+        for displayed, row in zip(binding["targets"], selected):
+            displayed["operation"] = row["operation"]
+            if row["operation"] == "git-worktree-remove":
+                displayed["native"] = {key: row["native"][key] for key in
+                                       ("repository", "common_directory", "head", "retained_ref")}
     response = "REMOVE " + plans.digest(binding)
     # RTK can capture stdout/stderr. Display directly on the controlling terminal.
     with open("/dev/tty", "w", encoding="utf-8", buffering=1) as terminal:
         if not terminal.isatty():
             raise ValueError("controlling terminal unavailable")
-        terminal.write("Permanent exact-directory cleanup. Inspect the complete binding below.\n")
+        terminal.write("Permanent selected-resource cleanup. Inspect the complete binding below.\n")
         terminal.write(json.dumps(binding, ensure_ascii=True, indent=2) + "\n")
-        terminal.write(json.dumps({"policy": plan["policy"], "warnings": WARNINGS}, ensure_ascii=True, indent=2) + "\n")
+        terminal.write(json.dumps({"policy": plan["policy"], "warnings": _warnings(plan)}, ensure_ascii=True, indent=2) + "\n")
         terminal.write("Type exactly " + response + " or type CANCEL:\n")
         answer = sys.stdin.readline(256).rstrip("\r\n")
     return answer == response
 
 
-def _revalidate(plan, selected, assessment_path, manifest_path, config_path):
-    assessment = plans.read_document(assessment_path)
+def _revalidate(plan, selected, assessment_path, manifest_path, config_path, completed=()):
+    for row in completed:
+        if row.get("operation") == "git-worktree-remove":
+            from .git_worktree import observe
+            if observe(row) != "absent-and-unregistered-branch-retained":
+                raise ValueError("completed worktree recovery/registration changed; remaining actions stopped")
+    assessment = plans.read_document(assessment_path, versions=(1, 2))
     manifest = plans.read_document(manifest_path) if manifest_path else None
     if plans.digest(assessment) != plan["assessment_digest"] or plans.digest(manifest) != plan["manifest_digest"]:
         raise ValueError("original assessment/consumer/retention inputs changed")
@@ -214,13 +227,28 @@ def _revalidate(plan, selected, assessment_path, manifest_path, config_path):
     if report["cancelled"] or report["invalid_scope"]:
         raise ValueError("current assessment unavailable or cancelled")
     current = report["plan"]
-    if current["scope_roots"] != plan["scope_roots"] or current["scope_identities"] != plan["scope_identities"]:
+    if plan["schema_version"] == 2 and (current["schema_version"] != 2 or current["policy"] != plan["policy"]):
+        raise ValueError("unknown or changed typed policy")
+    removed = {row["path"] for row in completed if row.get("operation") == "git-worktree-remove"}
+    expected_roots = [root for root in plan["scope_roots"] if root not in removed]
+    expected_identities = {root: value for root, value in plan["scope_identities"].items() if root not in removed}
+    if current["scope_roots"] != expected_roots or current["scope_identities"] != expected_identities:
         raise ValueError("scope/worktree/root identity changed")
     rows = {row["id"]: row for row in current["candidates"]}
     for old in selected:
         new = rows.get(old["id"])
         if new is None or new["assessment"] != "Eligible":
             raise ValueError("selected candidate no longer eligible")
+        if plan["schema_version"] == 2:
+            expected = dict(old)
+            native = old["operation"] == "git-worktree-remove"
+            if native:
+                expected["native"] = {**old["native"], "worktrees": [record for record in old["native"]["worktrees"]
+                                                                    if record["path"] not in removed]}
+            if new != expected:
+                raise ValueError("unknown or changed typed resource/evidence/content/identity fields")
+            _snapshot(old, limits, native=new["native"] if native else None)
+            continue
         for key in ("path", "host", "category", "project", "effect", "preconditions", "specification_digest", "references", "agent_assessment"):
             if new[key] != old[key]:
                 raise ValueError("selected evidence/effect/identity changed")
@@ -228,14 +256,28 @@ def _revalidate(plan, selected, assessment_path, manifest_path, config_path):
             if new["observation"][key] != old["observation"][key]:
                 raise ValueError("selected content/identity changed")
         _snapshot(old, limits)
+    return [rows[row["id"]] for row in selected]
 
 
-def _snapshot(row, limits):
+def _snapshot(row, limits, *, native=None):
     """Canonical inspected tree plus current mutation capabilities, never eligibility."""
+    if native:
+        for source in ("repository", "common_directory", "administration"):
+            native_path = Path(native[source])
+            parent = plans._open_parent(native_path)
+            descriptor = None
+            try:
+                descriptor = os.open(native_path.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+                _supported_filesystem(descriptor)
+            finally:
+                if descriptor is not None:
+                    os.close(descriptor)
+                os.close(parent)
     path = Path(row["path"])
     snapshot = review_task(path, inspect_content=True, max_entries=limits["max_entries"],
                            max_depth=limits["max_depth"], timeout=limits["timeout_seconds"],
-                           max_content_bytes=limits["max_content_bytes"])
+                           max_content_bytes=limits["max_content_bytes"],
+                           worktree_marker=native["marker_identity"] if native else None)
     if (not snapshot["content"]["complete"] or not snapshot.get("filesystem_local")
             or snapshot.get("identity") != row["observation"]["identity"]
             or plans.digest(plans._entries(snapshot)) != row["observation"]["tree_digest"]
@@ -394,17 +436,32 @@ def _receipt_host(plan):
     return {key: plan["host"][key] for key in ("identity", "system")}
 
 
+def _operation(plan):
+    return OPERATION if plan["schema_version"] == 1 else "permanent-selected-resource-removal"
+
+
+def _warnings(plan):
+    if plan["schema_version"] == 1:
+        return WARNINGS
+    return [*WARNINGS, "Native Git removal retains branches; ignored data has no automatic undo. Refusal/timeout stops the batch; reconcile without retry."]
+
+
 def _target_record(row, outcome):
     # Fixed schema prevents assessed purpose/paths/source payloads entering receipts.
-    return {"id": row["id"], "identity": row["observation"]["identity"],
+    target = {"id": row["id"], "identity": row["observation"]["identity"],
             "logical_bytes_estimate": row["observation"]["size"]["logical_bytes"],
             "allocated_bytes_estimate": row["observation"]["size"]["allocated_bytes"], "outcome": outcome}
+    if "operation" in row:
+        target["operation"] = row["operation"]
+        if row["operation"] == "git-worktree-remove":
+            target["native_identity_digest"] = plans.digest(row["native"])
+    return target
 
 
 def _validated_intent(state, pending, plan):
     host = _receipt_host(plan)
     if (set(pending) != {"schema_version", "operation_id", "plan_digest", "host", "intent_digest"}
-            or pending["schema_version"] != 1 or pending["plan_digest"] != plan["digest"] or pending["host"] != host):
+            or pending["schema_version"] != plan["schema_version"] or pending["plan_digest"] != plan["digest"] or pending["host"] != host):
         raise ValueError("pending state does not match original plan")
     operation_id = pending["operation_id"]
     if not isinstance(operation_id, str) or len(operation_id) != 32 or any(c not in "0123456789abcdef" for c in operation_id):
@@ -427,8 +484,8 @@ def _validated_intent(state, pending, plan):
         before[measurement["device"]] = value
     if set(before) != {row["observation"]["identity"]["device"] for row in selected}:
         raise ValueError("intent filesystem identity mismatch")
-    expected = {"schema_version": 1, "operation_id": operation_id, "operation": OPERATION,
-                "plan_digest": plan["digest"], "host": host, "warnings": WARNINGS,
+    expected = {"schema_version": plan["schema_version"], "operation_id": operation_id, "operation": _operation(plan),
+                "plan_digest": plan["digest"], "host": host, "warnings": _warnings(plan),
                 "outcome": "intent", "targets": [_target_record(row, "not-started") for row in selected],
                 "measurement": _measurement(before, {})}
     if intent != expected:
@@ -454,23 +511,30 @@ def apply(plan_path, assessment_path, selected_ids, *, all_eligible=False, manif
         operation_id = uuid.uuid4().hex
         targets = [_target_record(row, "not-started") for row in selected]
         before = _free(selected)
-        intent = {"schema_version": 1, "operation_id": operation_id, "operation": OPERATION,
-                  "plan_digest": plan["digest"], "host": _receipt_host(plan), "warnings": WARNINGS,
+        intent = {"schema_version": plan["schema_version"], "operation_id": operation_id, "operation": _operation(plan),
+                  "plan_digest": plan["digest"], "host": _receipt_host(plan), "warnings": _warnings(plan),
                   "outcome": "intent", "targets": targets, "measurement": _measurement(before, {})}
         state.write(operation_id + ".intent.json", intent)
-        state.write("pending.json", {"schema_version": 1, "operation_id": operation_id,
+        state.write("pending.json", {"schema_version": plan["schema_version"], "operation_id": operation_id,
                                      "plan_digest": plan["digest"], "host": _receipt_host(plan),
                                      "intent_digest": plans.digest(intent)})
         result = {**intent, "targets": [dict(target) for target in targets], "outcome": "completed"}
         try:
             for index, row in enumerate(selected):
-                _revalidate(plan, selected[index:], assessment_path, manifest_path, config_path)
+                current_rows = _revalidate(plan, selected[index:], assessment_path, manifest_path, config_path, selected[:index])
                 state.verify()
                 result["targets"][index]["outcome"] = "started-outcome-unknown"
-                _remove(row, plan["policy"]["limits"])
+                if plan["schema_version"] == 2 and row["operation"] == "git-worktree-remove":
+                    from .git_worktree import remove
+                    remove(current_rows[0], plan["policy"]["limits"])
+                else:
+                    _remove(row, plan["policy"]["limits"])
                 result["targets"][index]["outcome"] = "removed"
-        except (OSError, ValueError, KeyError, TypeError, KeyboardInterrupt):
+        except (OSError, ValueError, KeyError, TypeError, KeyboardInterrupt) as error:
             result["outcome"] = "partial-or-failed"
+            from .git_worktree import NativeRemovalFailed
+            if isinstance(error, NativeRemovalFailed):
+                result["native_failure"] = error.diagnostic
         result["measurement"] = _measurement(before, _free(selected))
         try:
             state.write(operation_id + ".result.json", result)
@@ -484,7 +548,7 @@ def apply(plan_path, assessment_path, selected_ids, *, all_eligible=False, manif
 def reconcile(plan_path):
     """Inspect interrupted identities only. Never continue or retry deletion."""
     _capabilities()
-    plan = plans.read_document(plan_path)
+    plan = plans.read_document(plan_path, versions=(1, 2))
     if set(plan) != PLAN_FIELDS or plan["digest"] != plans.digest({key: value for key, value in plan.items() if key != "digest"}):
         raise ValueError("original frozen plan required")
     with State([row["path"] for row in plan["candidates"]] + plan["scope_roots"]) as state:
@@ -492,10 +556,16 @@ def reconcile(plan_path):
         if pending is None or plan["host"] != plans.new_report("", None, {})["host"]:
             raise ValueError("no matching same-host pending operation")
         intent = _validated_intent(state, pending, plan)
+        if plan["schema_version"] == 2:
+            plans.validate_selection(plan, [target["id"] for target in intent["targets"]])
         rows = {row["id"]: row for row in plan["candidates"]}
         observed = []
         for target in intent["targets"]:
             row = rows[target["id"]]
+            if plan["schema_version"] == 2 and row.get("operation") == "git-worktree-remove":
+                from .git_worktree import observe
+                observed.append({**target, "outcome": observe(row)})
+                continue
             outcome = "unknown"
             parent = None
             try:
