@@ -676,11 +676,68 @@ class GuardedCleanup(unittest.TestCase):
         self.plan = self.fixture.review()["plan"]
         self.plan_path.write_text(json.dumps(self.plan))
         selected = [row for row in self.plan["candidates"] if row["id"] in self.ids]
-        self.assertEqual([row["assessment"] for row in selected], ["Eligible", "Eligible"])
+        self.assertEqual([row["assessment"] for row in selected], ["Review", "Review"])
         before = self.resources()
-        with self.assertRaises(ValueError):
-            self.apply()
+        owner = self.owner()
+        with patch.object(owner, "_confirm", side_effect=AssertionError("ineligible batch reached confirmation")):
+            with self.assertRaises(ValueError):
+                with patch.object(owner, "_state_path", return_value=self.state_path):
+                    owner.apply(self.plan_path, self.assessment_path, self.ids)
         self.assertEqual(before, self.resources())
+
+        # A previously frozen/combined Eligible plan must also reject before any
+        # revalidation, confirmation or receipt/effect, independent of new freeze.
+        assessment = self.fixture.assessment
+        first = self.fixture.review({**assessment, "candidates": [assessment["candidates"][0]]})
+        second = self.fixture.review({**assessment, "candidates": [assessment["candidates"][1]]})
+        legacy = copy.deepcopy(first["plan"])
+        legacy["candidates"] = [first["candidates"][0], second["candidates"][0]]
+        self.assertEqual([row["assessment"] for row in legacy["candidates"]], ["Eligible", "Eligible"])
+        legacy["assessment_digest"] = self.fixture.owner().digest(assessment)
+        legacy["digest"] = self.fixture.owner().digest({key: value for key, value in legacy.items() if key != "digest"})
+        self.plan_path.write_text(json.dumps(legacy))
+        with patch.object(owner, "_state_path", return_value=self.state_path), \
+                patch.object(owner, "_revalidate", side_effect=AssertionError("legacy batch reached revalidation")), \
+                patch.object(owner, "_confirm", side_effect=AssertionError("legacy batch reached confirmation")):
+            with self.assertRaises(ValueError):
+                owner.apply(self.plan_path, self.assessment_path, self.ids)
+        self.assertFalse(self.state_path.exists())
+        self.assertEqual(before, self.resources())
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS removal hash boundary")
+    def test_removal_file_mount_refusal_precedes_hash_read_and_other_effects(self):
+        owner = self.owner()
+        target = self.project / "A/data.txt"
+        identity = target.stat()
+        remove, snapshot, mount, read = owner._remove, owner._snapshot, owner.mount_identity, owner.os.read
+        reads = []
+        ready = False
+        def snapshot_then_watch(row, limits):
+            nonlocal ready
+            result = snapshot(row, limits)
+            ready = True
+            return result
+        def observed_mount(descriptor):
+            observed = os.fstat(descriptor)
+            if ready and (observed.st_dev, observed.st_ino) == (identity.st_dev, identity.st_ino):
+                return mount(descriptor) + 1
+            return mount(descriptor)
+        def observed_read(descriptor, count):
+            observed = os.fstat(descriptor)
+            if ready and (observed.st_dev, observed.st_ino) == (identity.st_dev, identity.st_ino):
+                reads.append(descriptor)
+            return read(descriptor, count)
+        def guarded_remove(row, limits):
+            with patch.object(owner, "_snapshot", side_effect=snapshot_then_watch), \
+                    patch.object(owner, "mount_identity", side_effect=observed_mount), \
+                    patch.object(owner.os, "read", side_effect=observed_read):
+                return remove(row, limits)
+        with patch.object(owner, "_remove", side_effect=guarded_remove):
+            result = self.apply()
+        self.assertEqual(reads, [])
+        self.assertEqual(result["outcome"], "partial-or-failed")
+        self.assertEqual([row["outcome"] for row in result["targets"]], ["started-outcome-unknown", "not-started"])
+        self.assertEqual(self.before, self.resources())
 
     def prepare_nested_plan(self):
         self.fixture.nested_outputs()

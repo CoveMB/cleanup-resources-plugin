@@ -559,15 +559,9 @@ def validate_selection(plan, selected_ids, *, host=None):
             raise ValueError("unsupported effect/host")
         if any(_overlap(path, Path(other["path"])) for other in selected):
             raise ValueError("overlapping selected targets")
-        if any(_evidence_conflict(row, other) for other in selected):
+        if _evidence_conflict(row, row) or any(_evidence_conflict(row, other) for other in selected):
             raise ValueError("selected target contains another selection's evidence or rebuild inputs")
         selected.append(row)
-    # Evidence/rebuild inputs for an earlier item must survive later selections.
-    # Per-item reassessment alone would drop already processed obligations.
-    for row in selected:
-        if any(_inside(Path(reference["path"]), Path(target["path"]))
-               for reference in row.get("references", {}).values() for target in selected):
-            raise ValueError("selected batch contains required evidence/rebuild inputs")
     return selected
 
 

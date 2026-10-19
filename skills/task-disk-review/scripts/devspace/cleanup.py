@@ -331,6 +331,8 @@ def _remove(row, limits):
                     try:
                         if file_identity(os.fstat(child)) != entry["identity"]:
                             raise ValueError("file replaced before open")
+                        if mount_identity(child) != root_mount:
+                            raise ValueError("file mount substituted before removal read")
                         checksum = hashlib.sha256()
                         read_bytes = 0
                         while True:
