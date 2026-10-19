@@ -241,7 +241,7 @@ def _assess(row, specification, references, snapshot, historical, deadline):
     """Mechanical gates plus explicitly attributed agent evidence interpretation.
 
     Reference hashes cannot adjudicate semantic truth or fabricated provenance.
-    The agent must actually read/interpret sources. I4 evaluates that behavior.
+    The agent must actually read/interpret sources.
     """
     row["assessment_basis"] = ASSESSMENT_BASIS
     row["specification_digest"] = digest(specification)
@@ -513,7 +513,7 @@ def review_scope(selected, *, mode="task", assessment=None, manifest=None, holds
 
 
 def validate_selection(plan, selected_ids, *, host=None):
-    """Validate frozen selection data only; I5 must independently revalidate reality."""
+    """Validate frozen selection data only; any cleanup executor must independently revalidate current state."""
     payload = {key: value for key, value in plan.items() if key != "digest"}
     if (plan.get("digest") != digest(payload) or plan.get("kind") != "frozen-review-not-authorization"
             or plan.get("schema_version") != 1):

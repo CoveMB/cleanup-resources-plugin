@@ -1,4 +1,4 @@
-"""Q2: agent-created disposable Git fixtures, no external fixture remotes."""
+"""Agent-created disposable Git fixtures, no external fixture remotes."""
 import hashlib
 import importlib.util
 import json

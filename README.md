@@ -1,6 +1,6 @@
 # Cleanup Resources Plugin
 
-Read-only task/project disk review through one Codex skill and a standalone Python helper. Reviews can produce assessed frozen plans. **No apply, approval-execution or deletion command exists.** Global inventory and installed-host certification remain later work.
+Read-only task/project disk review through one Codex skill and a standalone Python helper. Reviews can produce assessed frozen plans. **No apply, approval-execution or deletion command exists.** Global inventory is not supported.
 
 ## Run a review
 
@@ -66,7 +66,7 @@ Defaults: 2,000 entries per metadata/content phase, depth 12, a cooperative 10-s
 
 Assessment/plan documents and each selected reference are limited to 1 MiB; at most 64 explicitly assessed candidates and 128 reference IDs are accepted. A larger source file requires a different adequate inventory/evidence path or remains Review; the helper does not silently sample it.
 
-macOS/Linux descriptor and kernel filesystem capabilities are checked. Content assessment recognizes local APFS/HFS on macOS and selected common local Linux filesystems; unsupported/network/FUSE/known sync boundaries stay report-only. A local filesystem flag does not prove a directory unsynchronized: preserve unresolved storage/use boundaries in assessment. WSL/remote aliases are unsupported for executable eligibility. Windows traversal is unavailable. OS machine identity is hashed with root identity; absent identity blocks eligibility. These observations do not certify deletion safety; I5/I7 own that separate work.
+macOS/Linux descriptor and kernel filesystem capabilities are checked. Content assessment recognizes local APFS/HFS on macOS and selected common local Linux filesystems; unsupported/network/FUSE/known sync boundaries stay report-only. A local filesystem flag does not prove a directory unsynchronized: preserve unresolved storage/use boundaries in assessment. WSL/remote aliases are unsupported for executable eligibility. Windows traversal is unavailable. OS machine identity is hashed with root identity; absent identity blocks eligibility. These observations do not certify deletion safety; cleanup execution and confirmation require separate verification.
 
 Logical/allocated totals count unique examined regular files once; unknown descendants and directory metadata are excluded. Allocated blocks are estimates, not reclaimable bytes: external hardlinks, sparse files, clones/snapshots and concurrent writes limit attribution. Free space below 10% warns, below 5% emphasizes. No recovery is claimed. Links/unselected mounts are not traversed; Ctrl-C returns partial output. Blocked OS calls/process termination can delay cooperative limits. The plugin cannot control unrelated concurrent writers.
 
