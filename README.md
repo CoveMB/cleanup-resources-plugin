@@ -1,6 +1,6 @@
 # Cleanup Resources Plugin
 
-Read-only disk usage review of **one selected task directory**, through one Codex skill or a standalone Python helper. I1 is implemented; assessed plans, project/global inventory, installed-host certification and cleanup remain future work. No deletion/apply command exists.
+Read-only disk usage review of **one selected task directory**, through one Codex skill or a standalone Python helper. Assessed plans and project/global inventory are not supported. No deletion/apply command exists.
 
 ## Run from a terminal
 
@@ -11,7 +11,7 @@ python3 skills/task-disk-review/scripts/devspace.py review --task "/path/to/task
 python3 skills/task-disk-review/scripts/devspace.py review --task "/path/to/task" --json
 ```
 
-The packaged `task-disk-review` skill uses the same helper. Its intended prompt is “Review cleanup for this task directory: /path/to/task.” Follow [OpenAI's plugin installation documentation](https://developers.openai.com/plugins/build/plugins) for the root `plugin.json` package. No installer, hook, settings change or background scan is bundled. Actual installed Codex CLI/desktop invocation remains unverified until the host compatibility increment.
+The packaged `task-disk-review` skill uses the same helper. Its intended prompt is “Review cleanup for this task directory: /path/to/task.” Follow [OpenAI's plugin installation documentation](https://developers.openai.com/plugins/build/plugins) for the root `plugin.json` package. No installer, hook, settings change or background scan is bundled. Actual installed Codex CLI/desktop invocation remains unverified.
 
 Traversal requires no-follow directory descriptors: macOS and Linux are capability checked. Linux additionally reads its own kernel descriptor mount IDs to detect same-device bind mounts. Missing capabilities or mount metadata produce Unavailable coverage; Windows currently reports unavailable traversal. Python 3.12 is the declared minimum, with runtime verification recorded separately in the implementation evidence; version alone does not certify a host.
 
