@@ -163,6 +163,9 @@ def _expected_entries(entries):
 
 def _validate_assessment(assessment):
     """Shape/bounds only. This deliberately does not evaluate source prose."""
+    if isinstance(assessment, dict) and assessment.get("schema_version") == 3:
+        from .docker_cleanup import validate_assessment
+        return validate_assessment(assessment)
     def fields(value, allowed):
         if not isinstance(value, dict) or set(value) - set(allowed):
             raise ValueError("unsupported assessment fields")
@@ -374,7 +377,49 @@ def validate_manifest(manifest):
     return manifest
 
 
-def review_scope(selected, *, mode="task", assessment=None, manifest=None, holds=(), exclusions=(),
+def review_scope(selected, **options):
+    """Version 3 adds separately typed provider rows; old producers stay intact."""
+    assessment = options.get("assessment")
+    if not assessment or assessment.get("schema_version") != 3:
+        return _review_scope(selected, **options)
+    from . import docker_cleanup
+    _validate_assessment(assessment)
+    started = time.monotonic()
+    timeout = options.get("timeout", 10.0)
+    filesystem = {**assessment, "schema_version": 2,
+                  "candidates": [row for row in assessment["candidates"] if not docker_cleanup.is_docker(row)]}
+    report = _review_scope(selected, **{**options, "assessment": filesystem})
+    provider_ids = set()
+    for specification in assessment["candidates"]:
+        if not docker_cleanup.is_docker(specification):
+            continue
+        if time.monotonic() - started >= timeout or report["cancelled"] or report["invalid_scope"]:
+            raise ValueError("Docker review budget/cancellation/scope prevents complete inspection")
+        try:
+            row = docker_cleanup.review(specification, assessment["references"], report["host"],
+                                    report["scope"]["canonical"], timeout=timeout - (time.monotonic() - started),
+                                    cancelled=options.get("cancelled"),
+                                    blocked=("configured host differs; no provider inspection" if options.get("mode") == "global"
+                                             and selected.get("host_identity", report["host"]["identity"]) != report["host"]["identity"]
+                                             else "provider socket held/excluded" if any(_overlap(Path(specification["docker"]["endpoint"][7:]).resolve(strict=False), Path(path).resolve(strict=False))
+                                                  for path in (*report["plan"]["policy"]["holds"], *report["plan"]["policy"]["exclusions"])) else None))
+        except docker_cleanup.InspectionCancelled:
+            report["cancelled"] = True
+            report["coverage"].update(complete=False, stop_reason="Docker review cancelled; remaining provider state unknown")
+            break
+        if row["id"] in provider_ids:
+            raise ValueError("duplicate Docker resource")
+        provider_ids.add(row["id"])
+        report["candidates"].append(row)
+    old = report["plan"]
+    report["limitations"] = ["Provider stores stay outside generic directory cleanup; explicitly assessed Docker resources use native lifecycle. Package storage remains metadata-only."
+                             if item.startswith("Provider storage is report-only") else item for item in report["limitations"]]
+    freeze_review(report, assessment, options.get("manifest"), old["policy"]["holds"],
+                  old["policy"]["exclusions"], old["policy"]["limits"])
+    return report
+
+
+def _review_scope(selected, *, mode="task", assessment=None, manifest=None, holds=(), exclusions=(),
                  max_entries=2000, max_depth=12, timeout=10.0, max_content_bytes=256 * 1024 * 1024, cancelled=None,
                  evidence_warn_bytes=EVIDENCE_WARN_BYTES, evidence_explain_bytes=EVIDENCE_EXPLAIN_BYTES):
     validate_evidence_thresholds(evidence_warn_bytes, evidence_explain_bytes)
@@ -556,7 +601,9 @@ def freeze_review(report, assessment, manifest, holds, exclusions, limits):
     report["limitations"] = ["Reports contain metadata/digests, never inspected file payloads; inspect before sharing."
                              if item.startswith("Reports contain host and selected/relative path metadata;") else item
                              for item in report["limitations"]]
-    report["limitations"].append("Assessed eligibility includes agent interpretation, not semantic certification by this helper. Frozen review data is not authorization; apply requires fresh interactive confirmation and revalidation.")
+    limitation = "Assessed eligibility includes agent interpretation, not semantic certification by this helper. Frozen review data is not authorization; apply requires fresh interactive confirmation and revalidation."
+    if limitation not in report["limitations"]:
+        report["limitations"].append(limitation)
     plan = {"schema_version": assessment["schema_version"] if assessment else 1, "kind": "frozen-review-not-authorization", "host": report["host"],
             "scope_roots": report["scope_roots"], "candidates": report["candidates"],
             "assessment_digest": digest(assessment), "manifest_digest": digest(manifest),
@@ -571,7 +618,7 @@ def freeze_review(report, assessment, manifest, holds, exclusions, limits):
             plan["scope_identities"][root] = {key: file_identity(metadata)[key] for key in ("device", "inode", "mode")}
         except OSError:
             plan["scope_identities"][root] = None
-    if plan["schema_version"] == 2:
+    if plan["schema_version"] in (2, 3):
         for row in plan["candidates"]:
             row.setdefault("operation", "directory-remove")
     plan["digest"] = digest(plan)
@@ -583,16 +630,18 @@ def validate_selection(plan, selected_ids, *, host=None):
     """Validate frozen selection data only; any cleanup executor must independently revalidate current state."""
     payload = {key: value for key, value in plan.items() if key != "digest"}
     if (plan.get("digest") != digest(payload) or plan.get("kind") != "frozen-review-not-authorization"
-            or plan.get("schema_version") not in (1, 2)):
+            or plan.get("schema_version") not in (1, 2, 3)):
         raise ValueError("changed or unsupported frozen plan")
     if plan["host"] != (host or new_report("", None, {})["host"]):
         raise ValueError("execution host differs")
-    if plan["schema_version"] == 2:
+    if plan["schema_version"] in (2, 3):
+        from .docker_cleanup import OPERATIONS
         allowed = {"id", "path", "host", "category", "project", "purpose", "assessment", "reason", "effect",
                    "references", "comparison", "preconditions", "operation", "native", "observation",
                    "assessment_basis", "specification_digest", "agent_assessment"}
         for row in plan["candidates"]:
-            if set(row) - allowed or row.get("operation") not in {"directory-remove", "git-worktree-remove"}:
+            operations = {"directory-remove", "git-worktree-remove"} | (OPERATIONS if plan["schema_version"] == 3 else set())
+            if set(row) - allowed or row.get("operation") not in operations:
                 raise ValueError("unknown frozen resource fields/operation")
             if row["operation"] == "directory-remove" and "native" in row:
                 raise ValueError("directory cannot carry native identity")
@@ -604,8 +653,14 @@ def validate_selection(plan, selected_ids, *, host=None):
         row = rows.get(identifier)
         if row is None or row["assessment"] != "Eligible" or not row.get("observation", {}).get("complete"):
             raise ValueError("unknown or ineligible selection")
-        native = plan["schema_version"] == 2 and row.get("operation") == "git-worktree-remove"
-        if plan["schema_version"] == 2 and row.get("operation") not in {"directory-remove", "git-worktree-remove"}:
+        from .docker_cleanup import is_docker, EFFECTS
+        if plan["schema_version"] == 3 and is_docker(row):
+            if row["effect"] != EFFECTS[row["operation"]] or row["host"] != plan["host"]:
+                raise ValueError("unsupported Docker effect/host")
+            selected.append(row)
+            continue
+        native = plan["schema_version"] in (2, 3) and row.get("operation") == "git-worktree-remove"
+        if plan["schema_version"] in (2, 3) and row.get("operation") not in {"directory-remove", "git-worktree-remove"}:
             raise ValueError("unknown typed operation")
         path = Path(row["path"])
         if (str(path) != os.path.abspath(path) or not any(_inside(path, Path(root)) for root in plan["scope_roots"])
@@ -617,21 +672,30 @@ def validate_selection(plan, selected_ids, *, host=None):
         valid_effect = row["effect"] == EFFECT if native else row["effect"].startswith("permanent removal of this exact directory;")
         if not valid_effect or row["host"] != plan["host"]:
             raise ValueError("unsupported effect/host")
-        if any(_overlap(path, Path(other["path"])) for other in selected):
+        if any(not is_docker(other) and _overlap(path, Path(other["path"])) for other in selected):
             raise ValueError("overlapping selected targets")
         if _evidence_conflict(row, row) or any(_evidence_conflict(row, other) for other in selected):
             raise ValueError("selected target contains another selection's evidence or rebuild inputs")
         selected.append(row)
-    if plan["schema_version"] == 2:
+    # Evidence/rebuild inputs for an earlier item must survive later selections.
+    # Per-item reassessment alone would drop already processed obligations.
+    for row in selected:
+        if any(_inside(Path(reference["path"]), Path(target["path"]))
+               for reference in row.get("references", {}).values() for target in selected if not is_docker(target)):
+            raise ValueError("selected batch contains required evidence/rebuild inputs")
+    if plan["schema_version"] in (2, 3):
         context = plan["review_context"]
         if context["mode"] in {"task", "project"} and any(
-                _inside(Path(context["selected"]), Path(target["path"])) for target in selected):
+                _inside(Path(context["selected"]), Path(target["path"])) for target in selected if not is_docker(target)):
             raise ValueError("selected target contains required review context; review from a retained repository checkout")
         for row in plan["candidates"]:
             if row.get("operation") == "git-worktree-remove" and "native" in row:
                 if any(_inside(Path(row["native"][key]), Path(target["path"]))
-                       for key in ("repository", "common_directory", "administration") for target in selected):
+                       for key in ("repository", "common_directory", "administration") for target in selected if not is_docker(target)):
                     raise ValueError("selected batch contains required native repository/recovery state")
+    if plan["schema_version"] == 3:
+        from .docker_cleanup import validate_batch
+        validate_batch(plan, selected)
     return selected
 
 

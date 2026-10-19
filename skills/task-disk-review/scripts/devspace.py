@@ -90,7 +90,7 @@ def main():
         print(json.dumps(result, ensure_ascii=True, indent=2))
         return 0 if result["outcome"] in {"completed", "cancelled", "reconciled-no-retry"} else 1
     try:
-        assessment = read_document(arguments.assessment, versions=(1, 2)) if arguments.assessment else None
+        assessment = read_document(arguments.assessment, versions=(1, 2, 3)) if arguments.assessment else None
         manifest = read_document(arguments.manifest) if arguments.manifest else None
         if arguments.manifest_output and manifest is None:
             raise ValueError("manifest output requires explicitly supplied opted-in helper-resource records")

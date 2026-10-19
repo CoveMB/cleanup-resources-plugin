@@ -12,7 +12,8 @@ import time
 from .report import new_report, record_space
 
 
-PRIVATE_DIRECTORIES = {".git", ".aws", ".ssh", ".wrangler", "databases"}
+PRIVATE_DIRECTORIES = {".git", ".aws", ".ssh", ".wrangler", "databases",
+                       ".docker", ".colima", "com.docker.docker", "group.com.docker"}
 PRIVATE_FILES = {".netrc", ".npmrc", ".pypirc", "credentials", ".bash_history", ".zsh_history"}
 
 

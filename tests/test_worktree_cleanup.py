@@ -224,7 +224,7 @@ class NativeWorktreeCleanup(unittest.TestCase):
             with self.subTest(mode=mode):
                 original = copy.deepcopy(self.assessment)
                 if mode == "version":
-                    self.assessment["schema_version"] = 3
+                    self.assessment["schema_version"] = 4
                 elif mode == "operation":
                     self.specifications[0]["operation"] = "shell-remove"
                 elif mode == "command":

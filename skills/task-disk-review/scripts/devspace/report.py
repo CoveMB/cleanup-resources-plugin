@@ -169,6 +169,8 @@ def render_text(report):
         lines.append(f"{entry['assessment']} | {quote(entry['path'])} | {entry['coverage']} | {entry['reason']}")
     for row in report.get("candidates", []):
         lines.append(f"{row['assessment']} | ID {row['id']} | {quote(row['path'])} | {row['reason']}")
+        if "provider_size_bytes_estimate" in row.get("observation", {}):
+            lines.append(f"Provider estimate: {row['observation']['provider_size_bytes_estimate']} bytes; host recovery unknown")
         if row.get("assessment_basis"):
             lines.append("Assessment basis: " + row["assessment_basis"])
         if row.get("comparison"):
