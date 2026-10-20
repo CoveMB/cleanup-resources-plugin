@@ -1,6 +1,6 @@
 # Cleanup Resources Plugin
 
-Task/project/global development disk review through one Codex skill and a standalone Python helper. Reviews produce assessed frozen plans. Separately confirmed cleanup supports exact eligible directories, ordinary linked Git worktrees, selected local Docker resources and supported singleton npm cache entries on tested local macOS/APFS capabilities. The agent stops after review; the user operates cleanup in their own terminal. Installed observations apply only to their identified runtime subject. Start with a prioritized read-only review; selected cleanup and practical outcomes are recorded only when actually performed.
+Task, project and general local disk-cleanup investigation through one Codex skill and a standalone Python helper. Reviews produce assessed frozen plans. Separately confirmed cleanup supports exact eligible directories, ordinary linked Git worktrees, selected local Docker resources and supported singleton npm cache entries on tested local macOS/APFS capabilities. The agent stops after review; the user operates cleanup in their own terminal. Installed observations apply only to their identified runtime subject. Start with a prioritized read-only review; selected cleanup and practical outcomes are recorded only when actually performed.
 
 ## Run a review
 
@@ -25,13 +25,21 @@ Candidate reasons identify the first unmet mechanical obligation, such as an abs
 
 A conversational read-only review need not save context. When a saved assessment or cleanup plan is requested, minimal private reference notes may record source locators and attributed interpretation outside all selected targets. Distinguish current observations, historical claims, agent interpretation and human decisions. A note's hash does not authenticate its meaning or turn it into independent content comparison. Never persist raw conversations in these notes or publish private context. Explain existing recovery copies and their costs without making surprise backups; absent resources are not evidence of plugin cleanup savings.
 
+## General investigation
+
+A request such as “help me free local disk space” can investigate relevant development, temporary, application/cache, Downloads/archive and selected provider storage. The skill starts from bounded metadata, prepares explicit helper scopes, and follows relevant recent or archived native conversation records when available. It uses actual source identities and current resource observations to distinguish creation, handoff, later reuse and unresolved need. A task request stays within its selected task context. Disk troubleshooting, performance diagnosis and filesystem repair remain outside this skill.
+
+The [skill procedure](skills/task-disk-review/SKILL.md) owns category selection, relevance and finite history-read limits. Missing tools, denied/truncated history and reached limits remain visible; they preserve affected uncertain resources without preventing useful recommendations elsewhere. Native context coverage is separate from the helper's configured filesystem/provider coverage. Supplied fictional records can demonstrate interpretation, not native retrieval or desktop invocation. Existing installed observations below retain their original subjects and do not establish this broader journey.
+
+Broader investigation adds no cleanup operation. Specialized application-cache and whole-project/source deletion, individual-file/archive removal, pnpm maintenance and unsupported provider operations remain unavailable. The report distinguishes these from existing guarded operations and excludes them from executable savings. No whole-account dump, private conversation-store scan, owner messaging or historical consent reuse is introduced.
+
 ## Global coverage and provider storage
 
 ```sh
 python3 skills/task-disk-review/scripts/devspace.py review --global --config "/selected/global-config.json" --json
 ```
 
-Select a small JSON file, prepared by the agent when using the skill. All paths are absolute; no default home/whole-disk scan or package-manager installation. Example placeholders:
+Select a small JSON file, prepared by the agent when using the skill, including for a general investigation. `roots` contains the exact selected directories; existing provider fields retain their meanings. Application-cache locations stay held for metadata review. All paths are absolute; no default home/whole-disk scan or package-manager installation. Example placeholders:
 
 ```json
 {
@@ -219,7 +227,7 @@ Ordinary generated/temp outputs, including unregistered resources, use the exist
 
 ## Evidence input
 
-Assessment JSON has `schema_version: 1`, a `references` dictionary and a `candidates` list. For a requested saved assessment or cleanup plan, the agent prepares it from the task investigation above and relevant existing records; users need no form or technical attestation. Context notes are attributed interpretation, never an independent content baseline. General chat discovery and private transcript/database access remain unsupported.
+Assessment JSON has `schema_version: 1`, a `references` dictionary and a `candidates` list. For a requested saved assessment or cleanup plan, the agent prepares it from the task investigation above and relevant existing records; users need no form or technical attestation. Context notes are attributed interpretation, never an independent content baseline. Relevant native history follows the skill's bounded investigation procedure; the Python helper has no history loader and private transcript/database access remains unsupported.
 
 References map IDs to `{"path":"/selected/record","sha256":"actual-64-hex-digest"}`. Paths are selected absolute regular files outside targets. One candidate's shape is illustrated below; placeholders are not evidence:
 
