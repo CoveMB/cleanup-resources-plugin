@@ -17,6 +17,14 @@ Without assessment/context inputs, the terminal helper still reports observation
 
 Task mode stays within its selected directory. Project mode supports non-Git projects and inventories Git-discovered linked worktrees when the selected project is itself a worktree root. Nested selections do not expand into their parent repository. Discovery alone leaves worktrees report-only. Explicitly assessed ordinary linked Git checkouts support native removal below; branches are always retained. Status includes staged, dirty, untracked, ignored, locked, detached and locally unpushed states; missing upstream/activity stays unknown. No fetch occurs. Git status inspection refuses configured clean/process filters because even status can execute them, including unused global LFS filters. Submodule contents and collapsed ignored-directory contents are not inspected by Git inventory.
 
+## Task context and explanations
+
+A task cleanup request starts from the invoking conversation and current resources. The skill uses trusted runtime/native identity and available relevant earlier turns or linked records to explain creation, purpose, consumers, later holds and recovery. It reports missing context and contradictory evidence explicitly; completion, matching names and historical release alone do not establish current disposability. Applicable exclusions survive discovery. The [skill procedure](skills/task-disk-review/SKILL.md) owns this investigation; the Python helper has no conversation loader or general history search.
+
+Candidate reasons identify the first unmet mechanical obligation, such as an absent independent baseline, unknown consumer, changed reference or missing recovery evidence. Further investigation may reveal other obligations. These explanations do not change eligibility: protected resources stay Keep, incomplete essential inspection stays Unavailable, and unresolved evidence stays Review. The agent resolves technical questions from evidence and asks only remaining human ownership, need, release or loss decisions.
+
+A conversational read-only review need not save context. When a saved assessment or cleanup plan is requested, minimal private reference notes may record source locators and attributed interpretation outside all selected targets. Distinguish current observations, historical claims, agent interpretation and human decisions. A note's hash does not authenticate its meaning or turn it into independent content comparison. Never persist raw conversations in these notes or publish private context. Explain existing recovery copies and their costs without making surprise backups; absent resources are not evidence of plugin cleanup savings.
+
 ## Global coverage and provider storage
 
 ```sh
@@ -211,7 +219,7 @@ Ordinary generated/temp outputs, including unregistered resources, use the exist
 
 ## Evidence input
 
-Assessment JSON has `schema_version: 1`, a `references` dictionary and a `candidates` list. The agent prepares it from the current conversation, user-selected references and relevant existing project records; users need no form or technical attestation. No automatic chat/history discovery or reconstruction.
+Assessment JSON has `schema_version: 1`, a `references` dictionary and a `candidates` list. For a requested saved assessment or cleanup plan, the agent prepares it from the task investigation above and relevant existing records; users need no form or technical attestation. Context notes are attributed interpretation, never an independent content baseline. General chat discovery and private transcript/database access remain unsupported.
 
 References map IDs to `{"path":"/selected/record","sha256":"actual-64-hex-digest"}`. Paths are selected absolute regular files outside targets. One candidate's shape is illustrated below; placeholders are not evidence:
 
