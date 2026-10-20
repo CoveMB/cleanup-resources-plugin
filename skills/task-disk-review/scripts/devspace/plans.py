@@ -20,6 +20,10 @@ BLOCKING_FINDINGS = {"required-failure", "persistent-state", "unique-state", "mo
                      "offline-dependency", "inadequate-recovery", "hold", "active-consumer"}
 
 
+class _AssessmentUnresolved(ValueError):
+    """A fixed diagnostic authored by the assessment owner, never a source payload."""
+
+
 def canonical_json(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode()
 
@@ -69,7 +73,7 @@ def _read_file(path, limit=DOCUMENT_LIMIT, deadline=None):
                 if len(data) > limit:
                     raise ValueError("reference byte limit")
             if file_identity(before) != file_identity(os.fstat(file_descriptor)):
-                raise ValueError("reference changed during inspection")
+                raise _AssessmentUnresolved("reference changed during inspection")
             return bytes(data), file_identity(before)
         finally:
             os.close(file_descriptor)
@@ -119,7 +123,7 @@ def _reference(identifier, references, target, observed, deadline):
            for entry in observed):
         raise ValueError("self-reference hardlink alias")
     if hashlib.sha256(data).hexdigest() != reference["sha256"]:
-        raise ValueError("reference digest changed")
+        raise _AssessmentUnresolved("reference digest changed")
     return data, {"path": str(path), "sha256": reference["sha256"], "identity": identity}
 
 
@@ -281,27 +285,37 @@ def _assess(row, specification, references, snapshot, historical, deadline):
     payloads = {}
 
     def reference(identifier):
-        if identifier not in checked:
-            payloads[identifier], checked[identifier] = _reference(identifier, references, Path(row["path"]), observed, deadline)
-        return payloads[identifier]
+        try:
+            if identifier not in checked:
+                payloads[identifier], checked[identifier] = _reference(identifier, references, Path(row["path"]), observed, deadline)
+            return payloads[identifier]
+        except _AssessmentUnresolved:
+            raise
+        except (ValueError, KeyError, TypeError, OSError, UnicodeError, RecursionError):
+            raise _AssessmentUnresolved("referenced evidence unavailable or unsafe") from None
 
-    def basis(claim):
+    def basis(claim, missing_reason):
         identifiers = claim.get("basis", [])
         if not identifiers:
-            raise ValueError("missing contextual evidence; interpretation remains unknown")
+            raise _AssessmentUnresolved(missing_reason)
         for identifier in identifiers:
             reference(identifier)
 
+    unresolved_reason = "independent content baseline invalid or incomplete"
     try:
         content = specification.get("content", {})
-        basis(content)
+        basis(content, "content provenance evidence missing")
         actual = _entries(snapshot)
         if content.get("method") == "inventory":
+            if "reference" not in content:
+                raise _AssessmentUnresolved("independent content baseline missing or unsupported")
             expected = json.loads(reference(content["reference"]), object_pairs_hook=_unique_keys)
             if set(expected) != {"schema_version", "entries"} or expected["schema_version"] != 1:
-                raise ValueError("reference is not a target output inventory")
+                raise _AssessmentUnresolved("reference is not a target output inventory")
             expected = _expected_entries(expected["entries"])
         elif content.get("method") == "source-files":
+            if "files" not in content:
+                raise _AssessmentUnresolved("independent content baseline missing or unsupported")
             expected = []
             for path, identifier in content["files"].items():
                 data = reference(identifier)
@@ -310,54 +324,59 @@ def _assess(row, specification, references, snapshot, historical, deadline):
             expected += content.get("directories", [])
             expected = _expected_entries(expected)
         else:
-            raise ValueError("no supported target-wide content comparison")
+            raise _AssessmentUnresolved("independent content baseline missing or unsupported")
         row["comparison"] = {"method": content["method"], "matched": expected == actual,
                              "provenance": "agent interpreted; not mechanically certified"}
         if expected != actual:
-            raise ValueError("extra, missing, modified or differently typed target contents")
+            raise _AssessmentUnresolved("extra, missing, modified or differently typed target contents")
+        unresolved_reason = "recovery evidence unresolved"
         recovery = specification.get("recovery", {})
-        basis(recovery)
+        basis(recovery, "recovery evidence missing")
         if row.get("operation") == "git-worktree-remove":
             from .git_worktree import EFFECT
-            basis(specification["worktree"])
+            basis(specification["worktree"], "worktree lifecycle evidence missing")
             if recovery.get("kind") != "retained-commit":
-                raise ValueError("native worktree requires retained branch resume evidence")
+                raise _AssessmentUnresolved("native worktree requires retained branch resume evidence")
             if row["native"]["ignored"]:
                 if not recovery.get("inputs") or not recovery.get("explanation"):
-                    raise ValueError("ignored generated contents need separate recovery evidence")
+                    raise _AssessmentUnresolved("ignored generated contents need separate recovery evidence")
                 for identifier in recovery["inputs"]:
                     reference(identifier)
             row["effect"] = EFFECT
         elif recovery.get("kind") == "rebuild":
             if not recovery.get("inputs"):
-                raise ValueError("rebuild inputs unknown")
+                raise _AssessmentUnresolved("rebuild inputs unknown")
             for identifier in recovery["inputs"]:
                 reference(identifier)
             row["effect"] = "permanent removal of this exact directory; rebuild required"
         elif recovery.get("kind") == "accepted-loss" and row["category"] != "dependencies":
             row["effect"] = "permanent removal of this exact directory; accepted loss, no undo promised"
         else:
-            raise ValueError("adequate rebuild/recovery evidence unresolved")
+            raise _AssessmentUnresolved("adequate rebuild/recovery evidence unresolved")
+        unresolved_reason = "consumer evidence unresolved"
         scope = specification.get("consumer_scope", {})
-        basis(scope)
+        basis(scope, "consumer scope evidence missing")
         if scope.get("unresolved", ["unknown"]):
-            raise ValueError("consumer scope unresolved")
+            raise _AssessmentUnresolved("consumer scope unresolved")
         known = set(historical.get("consumers", []))
         released = set()
         for consumer in consumers:
-            basis(consumer)
+            basis(consumer, "consumer release evidence missing")
             if consumer.get("state") != "released":
-                raise ValueError("consumer state unresolved")
+                raise _AssessmentUnresolved("consumer state unresolved")
             released.add(consumer["id"])
         if not known <= released:
-            raise ValueError("historical multiple consumers remain unresolved")
+            raise _AssessmentUnresolved("historical multiple consumers remain unresolved")
+        unresolved_reason = "purpose/category/release checkpoint unresolved"
         release = specification.get("release", {})
-        basis(release)
+        basis(release, "release evidence missing")
         if not release.get("checkpoint") or not specification.get("purpose") or row["category"] not in ({"worktree"} if row.get("operation") == "git-worktree-remove" else {"output", "dependencies"}):
-            raise ValueError("purpose/category/release checkpoint unresolved")
+            raise _AssessmentUnresolved("purpose/category/release checkpoint unresolved")
         row.update(assessment="Eligible", reason="complete comparison and evidence-backed content/use/release/recovery assessment")
+    except _AssessmentUnresolved as error:
+        row.update(assessment="Review", reason=str(error))
     except (ValueError, KeyError, TypeError, OSError, UnicodeError, RecursionError):
-        row.update(assessment="Review", reason="content comparison or contextual evidence unresolved; inspect assessment and references")
+        row.update(assessment="Review", reason=unresolved_reason)
     finally:
         row["references"] = checked
 
