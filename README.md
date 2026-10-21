@@ -4,6 +4,8 @@ Task/project/global development disk review through one Codex skill and a standa
 
 ## Run a review
 
+The plugin's `task-disk-review` skill requires explicit invocation in Codex, for example: `Use $task-disk-review to review /path/to/project`. Automatic skill selection is disabled by `policy.allow_implicit_invocation: false` in the skill's `agents/openai.yaml`.
+
 Requires Python 3.12+ and its standard library. Git is optional for project worktree inventory. From the repository or extracted runtime package:
 
 ```sh
