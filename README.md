@@ -96,6 +96,12 @@ Effective Codex CLI and desktop automatic-retention settings are **independently
 
 `--global` without `--config` returns a useful unconfigured report (exit 2). Missing providers and unknown effective retention are explicitly disclosed; no whole-disk completeness, model semantic truth, human acceptance or deletion safety is claimed. Terminal/extracted-package fixtures demonstrate the code path. The installed-host observations below cover only their tested subject and selected providers.
 
+## Platform compatibility
+
+Requires Python 3.12+ and the supported local macOS/Linux capabilities described under “Bounds, settings and persistence”. Cleanup remains limited to the tested local macOS/APFS contract. Configure locations for each computer and regenerate host-bound plans there.
+
+**Native Windows is unsupported**, including review, assessed input/plan I/O, and provider inventory. WSL is a separate Linux environment; Windows-backed, remote, network, and synchronized paths cannot qualify for cleanup. Intel Macs, Linux ARM, older systems and additional storage combinations retain validation gaps. The CI workflow configures macOS/Ubuntu moving labels with Python 3.12/3.14; configuration alone does not certify the current candidate or a particular OS release/architecture.
+
 ## Read-only host compatibility
 
 Observed on 18 October 2026 with the read-only task/project/global runtime package at revision `8c9fb1e` (ZIP SHA-256 `0467d9032f9f4f43b0ce90f44a5fa8f486faad97a3bbdca205e1d9749ba79cde`). The installed test copy was retained while later evidence-capture guidance was integrated. These observations do not certify that later guidance in installed hosts, other platforms or any deletion operation.
@@ -318,3 +324,5 @@ python3 -B scripts/build_package.py /path/to/new-cleanup-resources-plugin.zip
 Tests create disposable filesystem/Git fixtures with local refs and no external remotes, check preserved bytes and actual printed/serialized output, and invoke the extracted package. Simulated boundaries are distinguished from actual host observations.
 
 The ZIP's explicit allowlist includes the manifest, README, one skill/UI resource and stdlib helper modules. It excludes source design, private planning/evidence, tests, Git and bytecode; the builder never overwrites. Inspect actual contents before distribution/installation. Licensing remains undecided; an open PR is not a release, host certification or human acceptance.
+
+Repository-only development records under `docs/` distinguish this implementation from the paused context-aware cleanup proposal. They are excluded from the runtime ZIP; this README contains the runtime guidance needed by the skill.
