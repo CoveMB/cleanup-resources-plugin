@@ -20,7 +20,7 @@ Register the extracted package's **absolute skills directory** in the `skills` a
 }
 ```
 
-Replace the placeholder with the installed location. Absolute paths keep discovery independent of the active working directory. This uses OpenCode's native skill loader; the package contains no JavaScript plugin entrypoint. See the [OpenCode v2 skills documentation](https://opencode.ai/v2/docs/skills/) for discovery, precedence and permissions.
+Replace the placeholder with the installed location. If the `skills` array already has entries, append this path without replacing them. Absolute paths keep discovery independent of the active working directory. This uses OpenCode's native skill loader; the package contains no JavaScript plugin entrypoint. See the [OpenCode v2 skills documentation](https://opencode.ai/v2/docs/skills/) for discovery, precedence and permissions.
 
 ### Antigravity
 
