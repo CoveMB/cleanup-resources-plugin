@@ -1,10 +1,53 @@
 # Cleanup Resources Plugin
 
-Task/project/global development disk review through one Codex skill and a standalone Python helper. Reviews produce assessed frozen plans. Separately confirmed cleanup supports exact eligible directories, ordinary linked Git worktrees, selected local Docker resources and supported singleton npm cache entries on tested local macOS/APFS capabilities. The agent stops after review; the user operates cleanup in their own terminal. Installed observations apply only to their identified runtime subject. Start with a prioritized read-only review; selected cleanup and practical outcomes are recorded only when actually performed.
+Task/project/global development disk review through one agent skill and a standalone Python helper, with installation guidance for Codex, OpenCode v2 and Antigravity. Reviews produce assessed frozen plans. Separately confirmed cleanup supports exact eligible directories, ordinary linked Git worktrees, selected local Docker resources and supported singleton npm cache entries on tested local macOS/APFS capabilities. The agent stops after review; the user operates cleanup in their own terminal. Installed observations apply only to their identified runtime subject. Start with a prioritized read-only review; selected cleanup and practical outcomes are recorded only when actually performed.
+
+## Install the skill
+
+Keep the complete extracted runtime package together: `plugin.json`, this README and `skills/task-disk-review/`, including its scripts and UI metadata. The skill resolves this guide as `../../README.md` from its own directory. Copying only `SKILL.md` or the skill folder loses required runtime documentation. Use the allowlisted ZIP described in “Development and deliverable” for distribution; a source checkout can contain private planning or evidence that must not ship.
+
+### Codex
+
+Follow [OpenAI's plugin installation documentation](https://developers.openai.com/plugins/build/plugins). The existing manifest and `agents/openai.yaml` retain the Codex interface and explicit-only invocation policy.
+
+### OpenCode v2
+
+Register the extracted package's **absolute skills directory** in the `skills` array of your existing OpenCode configuration, preserving its other settings and skill sources:
+
+```json
+{
+  "skills": ["/absolute/path/to/cleanup-resources-plugin/skills"]
+}
+```
+
+Replace the placeholder with the installed location. If the `skills` array already has entries, append this path without replacing them. Absolute paths keep discovery independent of the active working directory. This uses OpenCode's native skill loader; the package contains no JavaScript plugin entrypoint. See the [OpenCode v2 skills documentation](https://opencode.ai/v2/docs/skills/) for discovery, precedence and permissions.
+
+### Antigravity
+
+Install the complete extracted package as a local plugin using the plugin manager, or the documented CLI commands:
+
+```sh
+agy plugin validate --strict /absolute/path/to/cleanup-resources-plugin
+agy plugin install /absolute/path/to/cleanup-resources-plugin
+```
+
+The existing root `plugin.json` identifies the plugin, and the default `skills/` directory supplies its skill. The [Antigravity plugin schema](https://antigravity.google/docs/build-plugins/) accepts the existing vendor `extensions` object; no second manifest or legacy workflow file is needed. See [Antigravity installation](https://antigravity.google/docs/plugins) for the App, CLI and IDE routes. Do not register the same skill separately through another discovery location.
+
+These routes follow documentation reviewed on 29 October 2026. OpenCode v2 and Antigravity discovery, explicit invocation and model behavior have not been exercised in installed clients. Verify the loaded skill path and a small read-only review in your installed version before relying on either route. Existing Codex observations below apply only to their recorded runtime subject.
+
+Client compatibility does not expand helper platform or provider support. Python 3.12+ is required; review uses supported local macOS/Linux capabilities, native Windows is unsupported, and cleanup requires tested local macOS/APFS capabilities. OpenCode- or Antigravity-managed worktrees/storage remain report-only: hold/exclude known selected paths, use `unknown` worktree lifecycle, and never relabel them as ordinary Git. The `codex_worktrees` configuration and Codex retention fields still describe Codex resources only.
 
 ## Run a review
 
-The plugin's `task-disk-review` skill requires explicit invocation in Codex, for example: `Use $task-disk-review to review /path/to/project`. Automatic skill selection is disabled by `policy.allow_implicit_invocation: false` in the skill's `agents/openai.yaml`.
+The `task-disk-review` skill requires explicit invocation:
+
+| Client | Example prompt |
+| --- | --- |
+| Codex | `Use $task-disk-review to review /path/to/project` |
+| OpenCode v2 | `@task-disk-review review /path/to/project` |
+| Antigravity | `/task-disk-review review /path/to/project` |
+
+Codex uses `policy.allow_implicit_invocation: false` in `agents/openai.yaml`. OpenCode v2 and Antigravity document `disable-model-invocation: true`, set in `SKILL.md`, for explicit-only loading. The skill body also requires explicit invocation. These discovery controls do not authorize cleanup: every host stops after review and hands the command to the user for their own terminal.
 
 Requires Python 3.12+ and its standard library. Git is optional for project worktree inventory. From the repository or extracted runtime package:
 
@@ -15,7 +58,7 @@ python3 skills/task-disk-review/scripts/devspace.py review --project "/path/to/p
   --assessment "/path/to/assessment.json" --plan-output "/outside/review-plan.json"
 ```
 
-Without assessment/context inputs, the terminal helper still reports observations and unknowns. It needs no model, account, chat history or package manager. The packaged `task-disk-review` skill uses the same helper and can gather selected contextual evidence. Follow [OpenAI's installation documentation](https://developers.openai.com/plugins/build/plugins). No installer, hook, settings change or background process is bundled. See the bounded installed CLI/desktop invocation observations below; they cover the identified runtime subject only.
+Without assessment/context inputs, the terminal helper still reports observations and unknowns. It needs no model, account, chat history or package manager. The packaged `task-disk-review` skill uses the same helper and can gather selected contextual evidence. No installer, hook, settings change or background process is bundled. See the bounded installed CLI/desktop invocation observations below; they cover the identified runtime subject only.
 
 Task mode stays within its selected directory. Project mode supports non-Git projects and inventories Git-discovered linked worktrees when the selected project is itself a worktree root. Nested selections do not expand into their parent repository. Discovery alone leaves worktrees report-only. Explicitly assessed ordinary linked Git checkouts support native removal below; branches are always retained. Status includes staged, dirty, untracked, ignored, locked, detached and locally unpushed states; missing upstream/activity stays unknown. No fetch occurs. Git status inspection refuses configured clean/process filters because even status can execute them, including unused global LFS filters. Submodule contents and collapsed ignored-directory contents are not inspected by Git inventory.
 
@@ -52,6 +95,12 @@ Docker is optional. Global discovery queries the installed CLI's `--host unix://
 Effective Codex CLI and desktop automatic-retention settings are **independently unknown**: no supported installed-version machine-readable interface is established here. No default count, inferred disabled setting or guarantee of ignored-file snapshot recovery is reported. Independent Codex cleanup may remove worktrees the plugin recommends retaining; plugin holds cannot control it. Consult installed settings and verify actual behavior during host certification. Current official [worktree documentation](https://learn.chatgpt.com/docs/environments/git-worktrees) describes handoff/restore and independent cleanup; it does not establish this host's effective configuration. [Docker usage](https://docs.docker.com/reference/cli/docker/system/df/) and [Desktop storage](https://docs.docker.com/desktop/troubleshoot-and-support/faqs/macfaqs/) explain summary/shared sizes and maximum versus actual allocation. These references do not certify actual provider access or installed-host behavior.
 
 `--global` without `--config` returns a useful unconfigured report (exit 2). Missing providers and unknown effective retention are explicitly disclosed; no whole-disk completeness, model semantic truth, human acceptance or deletion safety is claimed. Terminal/extracted-package fixtures demonstrate the code path. The installed-host observations below cover only their tested subject and selected providers.
+
+## Platform compatibility
+
+Requires Python 3.12+ and the supported local macOS/Linux capabilities described under “Bounds, settings and persistence”. Cleanup remains limited to the tested local macOS/APFS contract. Configure locations for each computer and regenerate host-bound plans there.
+
+**Native Windows is unsupported**, including review, assessed input/plan I/O, and provider inventory. WSL is a separate Linux environment; Windows-backed, remote, network, and synchronized paths cannot qualify for cleanup. Intel Macs, Linux ARM, older systems and additional storage combinations retain validation gaps. The CI workflow configures macOS/Ubuntu moving labels with Python 3.12/3.14; configuration alone does not certify the current candidate or a particular OS release/architecture.
 
 ## Read-only host compatibility
 
@@ -275,3 +324,5 @@ python3 -B scripts/build_package.py /path/to/new-cleanup-resources-plugin.zip
 Tests create disposable filesystem/Git fixtures with local refs and no external remotes, check preserved bytes and actual printed/serialized output, and invoke the extracted package. Simulated boundaries are distinguished from actual host observations.
 
 The ZIP's explicit allowlist includes the manifest, README, one skill/UI resource and stdlib helper modules. It excludes source design, private planning/evidence, tests, Git and bytecode; the builder never overwrites. Inspect actual contents before distribution/installation. Licensing remains undecided; an open PR is not a release, host certification or human acceptance.
+
+Repository-only development records under `docs/` distinguish this implementation from the paused context-aware cleanup proposal. They are excluded from the runtime ZIP; this README contains the runtime guidance needed by the skill.

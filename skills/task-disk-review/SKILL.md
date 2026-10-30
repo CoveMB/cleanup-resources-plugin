@@ -1,9 +1,12 @@
 ---
 name: task-disk-review
 description: Use for task/project/global development disk review or selected directory, native Git worktree, local Docker or supported npm cache cleanup. Excludes general disk troubleshooting.
+disable-model-invocation: true
 ---
 
 # Task, project and global disk review
+
+Use only when the user explicitly invokes `task-disk-review`. Resolve this skill's paths from its installed directory, not the reviewed project or current working directory. The [bundled runtime guide](../../README.md) is the README referenced below; installation must retain the complete plugin bundle, including that guide and the helper modules.
 
 Review a user-selected task, project or explicitly configured global development scope. Ask for scope only if missing. Do not infer thread identity from names/environment/Git. Project mode inventories linked worktrees only from a selected worktree root; task/nested scope never expands to its parent repository.
 
@@ -18,6 +21,8 @@ Add `--json` for structured output. Defaults are 2,000 metadata entries, 12 dire
 Use `--project` instead of `--task` for project review. Explain host/scope, unknown thread identity, partial coverage and logical versus allocated estimates. Git discovery remains report-only: inspect staged/dirty/untracked/ignored/locked/detached/local-upstream facts and unknown activity, preserving resume paths. Git filters or unavailable access mean unknown, not inactivity. No fetch. Worktree roots never enter generic directory cleanup; explicitly assessed ordinary linked checkouts use the native path below. Branches and other provider storage remain report-only.
 
 Use `--global --config FILE` for global review; use the small configuration contract in README. Gather only explicitly selected roots/holds/exclusions and known provider storage paths; no whole-disk scan, settings/database/history discovery or package-manager requirement. Without configuration, report unconfigured coverage. Global assessed paths are absolute and reuse the same evidence contract. Known package/Codex storage paths also belong in `--hold`/`--exclude` for task/project review; never treat managed resources as generic directory targets.
+
+Running this skill in OpenCode or Antigravity does not add a provider integration. Keep their managed worktrees and storage report-only, with selected known paths in `--hold`/`--exclude` (or global `holds`/`exclusions`). Their worktree lifecycle is `unknown`, never `git` merely because Git lists the checkout. The `codex_worktrees` configuration key and Codex retention report describe Codex resources only; do not repurpose them or infer the current host's retention settings.
 
 Global coverage distinguishes examined, skipped, inaccessible, unavailable and unconfigured locations. Partial or absent provider data is unknown usage. Git inventories come from bounded configured-root discovery; remote resources, synchronization/network/WSL boundaries and unsupported provider state stay report-only. Optional Docker discovery uses an explicitly selected Unix socket via the installed CLI; assessed native selection follows the Docker contract below. No remote context, login, credential probe, installation, blanket pruning or VM manipulation. Provider estimates stay separate from host file totals; native “reclaimable” labels never establish eligibility.
 
