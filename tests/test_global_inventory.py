@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "skills/task-disk-review/scripts"))
 from devspace import plans
 from devspace.git_inventory import InspectionUnavailable, InspectionCancelled
 import test_plans
+import test_git_inventory
 
 
 class GlobalCoverage(unittest.TestCase):
@@ -244,6 +245,122 @@ class GlobalCoverage(unittest.TestCase):
         self.assertEqual(self.locations(report, "package-storage")[0]["size"]["logical_bytes"], 2)
         self.assertNotIn("do-not-enumerate", json.dumps(report))
         self.assertNotIn("hidden", json.dumps(report))
+
+
+    def test_git_exclusions_block_configured_and_cli_scope_before_native_commands(self):
+        from devspace.git_inventory import _git
+        fixture = test_git_inventory.GitInventory()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        private = fixture.project / "private"
+        private.mkdir()
+        (private / "hidden-name.txt").write_bytes(b"excluded bytes")
+        before = test_git_inventory.snapshot(fixture.fixture)
+        for exclusion in (fixture.project, private, fixture.project / ".git", fixture.project / ".git/index"):
+            for source in ("config", "cli"):
+                config = {"schema_version": 1, "roots": [str(self.root), str(fixture.project)]}
+                options = {}
+                if source == "config":
+                    config["exclusions"] = [str(exclusion)]
+                else:
+                    options["exclusions"] = [str(exclusion)]
+                with self.subTest(exclusion=exclusion, source=source), \
+                        patch("devspace.git_inventory._git", wraps=_git) as native:
+                    report = plans.review_scope(config, mode="global", **options)
+                    native.assert_not_called()
+                    self.assertFalse(report["coverage"]["complete"])
+                    self.assertTrue(any(row["path"] == str(self.root / "output")
+                                        for row in report["candidates"]))
+                    self.assertTrue(all(not inventory["complete"] for inventory in report["git_inventories"]))
+                    if exclusion in (fixture.project, private):
+                        self.assertNotIn("hidden-name.txt", json.dumps(report))
+                    self.assertEqual(test_git_inventory.snapshot(fixture.fixture), before)
+
+    def test_git_exclusions_block_linked_checkout_probes_in_global_scope(self):
+        from devspace.git_inventory import _git
+        fixture = test_git_inventory.GitInventory()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        linked = fixture.fixture / "linked"
+        fixture.git("worktree", "add", "--detach", str(linked), "HEAD")
+        private = linked / "private"
+        private.mkdir()
+        (private / "hidden-name.txt").write_bytes(b"excluded bytes")
+        before = test_git_inventory.snapshot(fixture.fixture)
+        for source in ("config", "cli"):
+            config = {"schema_version": 1, "roots": [str(fixture.project)]}
+            options = {}
+            if source == "config":
+                config["exclusions"] = [str(private)]
+            else:
+                options["exclusions"] = [str(private)]
+            with self.subTest(source=source), patch("devspace.git_inventory._git", wraps=_git) as native:
+                report = plans.review_scope(config, mode="global", **options)
+                self.assertFalse(any(call.args[1] == linked for call in native.call_args_list))
+                inventory = report["git_inventories"][0]
+                rows = {row["path"]: row for row in inventory["worktrees"]}
+                self.assertTrue(rows[str(fixture.project)]["status_complete"])
+                self.assertFalse(rows[str(linked)]["status_complete"])
+                self.assertIsNone(rows[str(linked)]["untracked"])
+                self.assertFalse(inventory["complete"])
+                self.assertNotIn("hidden-name.txt", json.dumps(report))
+                self.assertEqual(test_git_inventory.snapshot(fixture.fixture), before)
+
+    def test_git_exclusions_preserve_provider_scope_distinction(self):
+        from devspace.git_inventory import _git
+        fixture = test_git_inventory.GitInventory()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        storage = fixture.project / "storage"
+        storage.mkdir()
+        (storage / "cached.txt").write_bytes(b"provider metadata remains selected")
+        before = test_git_inventory.snapshot(fixture.fixture)
+        config = {"schema_version": 1, "roots": [str(fixture.project)],
+                  "package_storage": [str(storage)]}
+        with patch("devspace.git_inventory._git", wraps=_git) as native:
+            report = plans.review_scope(config, mode="global")
+            native.assert_not_called()
+        self.assertFalse(report["git_inventories"][0]["complete"])
+        self.assertEqual(self.locations(report, "package-storage")[0]["status"], "examined")
+        config = {"schema_version": 1, "roots": [str(self.root)],
+                  "codex_worktrees": [str(fixture.project)]}
+        report = plans.review_scope(config, mode="global")
+        self.assertTrue(report["git_inventories"][0]["complete"])
+        self.assertTrue(report["git_inventories"][0]["worktrees"][0]["status_complete"])
+        with patch("devspace.git_inventory._git", wraps=_git) as native:
+            excluded = plans.review_scope(config, mode="global", exclusions=[str(storage)])
+            native.assert_not_called()
+        self.assertFalse(excluded["git_inventories"][0]["complete"])
+        self.assertEqual(test_git_inventory.snapshot(fixture.fixture), before)
+
+
+    def test_linked_selection_global_excludes_external_git_metadata_before_native_calls(self):
+        from devspace.git_inventory import _git
+        fixture = test_git_inventory.GitInventory()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        linked = fixture.fixture / "linked"
+        fixture.git("worktree", "add", "--detach", str(linked), "HEAD")
+        (linked / "visible.txt").write_bytes(b"useful linked filesystem observation")
+        before = test_git_inventory.snapshot(fixture.fixture)
+        for provider in ("roots", "codex_worktrees"):
+            for source in ("config", "cli"):
+                for exclusion in (fixture.project / ".git", fixture.project / ".git/config"):
+                    config = {"schema_version": 1, provider: [str(linked)]}
+                    options = {}
+                    if source == "config":
+                        config["exclusions"] = [str(exclusion)]
+                    else:
+                        options["exclusions"] = [str(exclusion)]
+                    with self.subTest(provider=provider, source=source, exclusion=exclusion), \
+                            patch("devspace.git_inventory._git", wraps=_git) as native:
+                        report = plans.review_scope(config, mode="global", **options)
+                        native.assert_not_called()
+                        inventory = report["git_inventories"][0]
+                        self.assertFalse(inventory["complete"])
+                        self.assertEqual(inventory["worktrees"], [])
+                        self.assertFalse(report["coverage"]["complete"])
+                        self.assertEqual(test_git_inventory.snapshot(fixture.fixture), before)
 
     def test_case_alias_provider_exclusion_does_not_enumerate_descendants(self):
         storage = self.base / "provider"

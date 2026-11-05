@@ -1,3 +1,5 @@
 interface:
   display_name: "Development Disk Review"
   short_description: "Review usage and exact cleanup selections"
+policy:
+  allow_implicit_invocation: false

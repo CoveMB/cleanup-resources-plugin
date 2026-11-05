@@ -227,7 +227,8 @@ def review_global(config, *, assessment=None, manifest=None, holds=(), exclusion
                         row["reason"] = "Git inventory budget exhausted; worktree state unknown"
                         row["coverage"]["complete"] = False
                         break
-                    inventory = inventory_git(git_root, timeout=remaining(), cancelled=cancelled)
+                    inventory = inventory_git(git_root, exclusions=exclusions if kind == "development" else selected_exclusions,
+                                              timeout=remaining(), cancelled=cancelled)
                     report["git_inventories"].append({"path": str(git_root), **inventory})
                     report["scope_roots"] = list(dict.fromkeys(report["scope_roots"] + [str(git_root)] + [item["path"] for item in inventory["worktrees"]]))
                     report["cancelled"] |= inventory["cancelled"]

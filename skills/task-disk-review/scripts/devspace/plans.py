@@ -550,7 +550,7 @@ def _review_scope(selected, *, mode="task", assessment=None, manifest=None, hold
     report["scope_roots"] = [str(roots[0])]
     report["linked_reviews"] = []
     if mode == "project" and not report["invalid_scope"] and not report["cancelled"]:
-        report["git"] = inventory_git(selected, timeout=remaining(), cancelled=cancelled)
+        report["git"] = inventory_git(selected, exclusions=exclusions, timeout=remaining(), cancelled=cancelled)
         report["cancelled"] = report["git"]["cancelled"]
         if report["cancelled"]:
             report["coverage"]["complete"] = False
