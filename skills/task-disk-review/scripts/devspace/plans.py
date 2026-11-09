@@ -443,6 +443,13 @@ def review_scope(selected, *, npm_caches=(), git_lineage=None, **options):
         for specification in assessment["candidates"]:
             if not npm_cache.is_npm_cache(specification):
                 continue
+            if assessment["schema_version"] == 5 and report["cancelled"]:
+                row = npm_cache.review(specification, assessment["references"], report["host"],
+                                       report["scope"]["canonical"], timeout=0,
+                                       blocked="review cancelled; provider state unexamined")
+                row.update(assessment="Unavailable", reason="review cancelled; provider state unexamined")
+                report["candidates"].append(row)
+                continue
             blocked = "npm cache held/excluded" if any(_overlap(Path(specification["npm"]["cache"]), Path(path))
                        for path in (*old["policy"]["holds"], *old["policy"]["exclusions"])) else None
             if options.get("mode") == "global" and selected.get("host_identity", report["host"]["identity"]) != report["host"]["identity"]:
@@ -541,6 +548,13 @@ def _review_docker_scope(selected, **options):
     provider_ids = set()
     for specification in assessment["candidates"]:
         if not docker_cleanup.is_docker(specification):
+            continue
+        if assessment["schema_version"] == 5 and report["cancelled"]:
+            row = docker_cleanup.review(specification, assessment["references"], report["host"],
+                                        report["scope"]["canonical"], timeout=0,
+                                        blocked="review cancelled; provider state unexamined")
+            row.update(assessment="Unavailable", reason="review cancelled; provider state unexamined")
+            report["candidates"].append(row)
             continue
         if time.monotonic() - started >= timeout or report["cancelled"] or report["invalid_scope"]:
             raise ValueError("Docker review budget/cancellation/scope prevents complete inspection")

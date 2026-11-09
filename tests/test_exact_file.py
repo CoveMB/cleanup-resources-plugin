@@ -58,10 +58,20 @@ class ExactFileFixture(unittest.TestCase):
         plan.write_text(json.dumps(result['plan'])); assessment.write_text(json.dumps(self.assessment))
         return result, plan, assessment
 
-    def survivors(self):
-        return {str(p.relative_to(self.base)): (review.file_identity(p.stat()), p.read_bytes())
-                for p in [self.records / 'source.txt', self.records / 'decision.txt', self.records / 'inventory.json',
-                          self.project / 'useful.txt', self.project / '.env']}
+    def survivors(self, extra=()):
+        snapshot = {}
+        for path in [self.records / 'source.txt', self.records / 'decision.txt', self.records / 'inventory.json',
+                     self.project / 'useful.txt', self.project / '.env', *extra]:
+            metadata = path.lstat()
+            security = {key: getattr(metadata, key, 0) for key in ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_flags')}
+            if stat.S_ISLNK(metadata.st_mode):
+                value = ('symlink', review.file_identity(metadata), security, metadata.st_nlink, os.readlink(path))
+            elif stat.S_ISDIR(metadata.st_mode):
+                value = ('directory', security)  # sibling effects change directory timestamps/nlink
+            else:
+                value = ('file', review.file_identity(metadata), security, metadata.st_nlink, path.read_bytes())
+            snapshot[str(path.relative_to(self.base))] = value
+        return snapshot
 
 
 class ExactFilePortable(ExactFileFixture):
@@ -134,18 +144,23 @@ class ExactFilePortable(ExactFileFixture):
             self.assertNotEqual(self.row(self.reviewed(document))['assessment'], 'Eligible')
         self.assertEqual(self.row(self.reviewed(holds=[str(self.target)]))['assessment'], 'Keep')
         inventory = self.records / 'inventory.json'; original = inventory.read_bytes()
-        for entries in ([], [{'path': 'wrong.txt', 'kind': 'file', 'mode': 420, 'size': len(PAYLOAD), 'sha256': hashlib.sha256(PAYLOAD).hexdigest()}]):
+        for entries in ([], [{'path': 'wrong.txt', 'kind': 'file', 'mode': 420, 'size': len(PAYLOAD), 'sha256': hashlib.sha256(PAYLOAD).hexdigest()}],
+                        [*json.loads(original)['entries'], {'path': 'extra.txt', 'kind': 'file', 'mode': 420, 'size': 5, 'sha256': hashlib.sha256(b'extra').hexdigest()}]):
             inventory.write_text(json.dumps({'schema_version': 1, 'entries': entries}))
             self.references['inventory']['sha256'] = hashlib.sha256(inventory.read_bytes()).hexdigest()
-            self.assertNotEqual(self.row(self.reviewed())['assessment'], 'Eligible')
+            row = self.row(self.reviewed()); self.assertNotEqual(row['assessment'], 'Eligible')
+            if len(entries) == 2:
+                self.assertEqual(row['assessment'], 'Review'); self.assertFalse(row['comparison']['matched'])
+                self.assertTrue(row['observation']['complete'])
         inventory.write_bytes(original)
 
     def test_file_special_protected_and_excluded_targets_not_read(self):
         self.reviewed()  # Reach valid contract before using the new operation owner.
         from devspace import exact_file
-        for kind in ('link', 'hardlink', 'fifo', 'directory', 'secret'):
+        for kind in ('link', 'hardlink', 'fifo', 'directory', 'secret', 'database', 'private'):
             with self.subTest(kind=kind):
-                path = self.project / ('.env.other' if kind == 'secret' else kind)
+                path = self.project / ('.env.other' if kind == 'secret' else 'state.sqlite' if kind == 'database' else '.ssh/private.txt' if kind == 'private' else kind)
+                if kind == 'private': path.parent.mkdir()
                 if kind == 'link': path.symlink_to(self.target)
                 elif kind == 'hardlink': os.link(self.target, path)
                 elif kind == 'fifo': os.mkfifo(path)
@@ -157,6 +172,9 @@ class ExactFilePortable(ExactFileFixture):
                 facade = types.SimpleNamespace(**{**vars(os), 'open': guarded_open, 'read': lambda *args: self.fail('forbidden payload read')})
                 with patch.object(exact_file, 'os', facade):
                     result = exact_file.review_file(path, max_content_bytes=1024, timeout=2)
+                    if kind in ('database', 'private'):
+                        document = copy.deepcopy(self.assessment); document['candidates'][0]['path'] = str(path)
+                        self.assertEqual(self.row(self.reviewed(document))['assessment'], 'Keep')
                 self.assertFalse(result['content']['complete'])
                 if kind == 'hardlink': path.unlink()
         with patch.object(exact_file, 'review_file', side_effect=AssertionError('excluded target inspection')):
@@ -212,6 +230,84 @@ class ExactFilePortable(ExactFileFixture):
                     self.assertNotIn('Traceback', result.stderr)
         self.assertEqual(before, self.survivors())
         self.assertEqual(original_target, (review.file_identity(self.target.stat()), self.target.read_bytes()))
+
+    def test_file_mixed_provider_cli_cancellation_preserves_report(self):
+        import base64
+        import subprocess
+        from devspace import git_inventory
+        cli = ROOT / 'skills/task-disk-review/scripts/devspace.py'
+        cache = self.base / 'cancel-cache'; cache.mkdir()
+        providers = [
+            {'operation': 'docker-image-remove', 'docker': {'endpoint': 'unix://' + str(self.base / 'unavailable.sock'), 'id': 'sha256:' + 'a' * 64}, 'category': 'image'},
+            {'operation': 'npm-cache-remove', 'npm': {'cache': str(cache), 'key': 'cancelled-entry', 'integrity': 'sha512-' + base64.b64encode(hashlib.sha512(PAYLOAD).digest()).decode()}, 'category': 'cache'},
+        ]
+        ap = self.base / 'mixed-assessment.json'; cp = self.base / 'mixed-config.json'; lp = self.base / 'claim.json'
+        cp.write_text(json.dumps({'schema_version': 1, 'roots': [str(self.project)]}))
+        digest = self.row(self.reviewed())['observation']['tree_digest']
+        before = self.survivors(); target = (review.file_identity(self.target.stat()), self.target.read_bytes())
+        # Only the actual file metadata boundary is interrupted. Provider owner
+        # constructors may produce unexamined rows; acquisition and advisory
+        # observation are forbidden. No complete report is injected.
+        code = '''import sys,runpy
+sys.path.insert(0,sys.argv[1])
+from devspace import exact_file,docker_cleanup,npm_cache,git_inventory
+boundary=int(sys.argv[2]); last=exact_file._last; calls=[0]
+def forbidden(*args,**kwargs): raise AssertionError('provider or advisory acquisition after file cancellation')
+def unavailable(*args,**kwargs): raise ValueError('deterministic unavailable provider control')
+def stopped(*args):
+ calls[0]+=1
+ if calls[0]==boundary: raise KeyboardInterrupt
+ return last(*args)
+docker_cleanup.LocalDocker=forbidden
+docker_cleanup.inspect=forbidden if boundary else unavailable
+npm_cache.inspect=forbidden if boundary else unavailable
+git_inventory.observe_lineage=forbidden
+if boundary: exact_file._last=stopped
+sys.argv=[sys.argv[3],*sys.argv[4:]]
+runpy.run_path(sys.argv[0],run_name='__main__')
+'''
+        for provider in providers:
+            for reverse in (False, True):
+                for mode in ('task', 'project', 'global'):
+                    file = copy.deepcopy(self.spec); file['observed_tree_digest'] = digest
+                    if mode == 'global': file['path'] = str(self.target)
+                    candidates = [file, provider]
+                    if reverse: candidates.reverse()
+                    assessment = {**self.assessment, 'candidates': candidates}; ap.write_text(json.dumps(assessment))
+                    scope = ['--global', '--config', str(cp)] if mode == 'global' else ['--' + mode, str(self.project)]
+                    args = ['review', *scope, '--assessment', str(ap), '--json']
+                    control = subprocess.run([sys.executable, '-B', '-c', code, str(cli.parent), '0', str(cli), *args], capture_output=True, text=True, timeout=20)
+                    self.assertIn(control.returncode, (0, 2), control.stderr)
+                    self.assertEqual(self.row(json.loads(control.stdout))['assessment'], 'Eligible')
+                    for kind in ((None,) if mode == 'task' else ('absent', 'merge', 'squash')):
+                        request = {'schema_version': 1, 'repository': str(self.project), 'path': str(self.project / 'unexamined-checkout'),
+                                   'expected_head': 'a' * 40, 'retained_ref': 'refs/heads/retained', 'destination_ref': 'refs/heads/main'}
+                        if kind in ('merge', 'squash'):
+                            request['integration'] = {'kind': kind, 'source_commit': 'b' * 40, 'destination_commit': 'c' * 40}
+                            if kind == 'squash': request['integration']['source_base_commit'] = 'd' * 40
+                        lp.write_text(json.dumps(request))
+                        supplied = args + (['--git-lineage', str(lp)] if kind else [])
+                        for boundary in (1, 2):
+                            with self.subTest(provider=provider['operation'], reverse=reverse, mode=mode, claim=kind, boundary=boundary):
+                                result = subprocess.run([sys.executable, '-B', '-c', code, str(cli.parent), str(boundary), str(cli), *supplied], capture_output=True, text=True, timeout=20)
+                                self.assertEqual(result.returncode, 130, result.stderr)
+                                report = json.loads(result.stdout); self.assertTrue(report['cancelled'])
+                                self.assertEqual(self.row(report)['assessment'], 'Unavailable')
+                                remaining = next(r for r in report['candidates'] if r.get('operation') == provider['operation'])
+                                self.assertEqual(remaining['assessment'], 'Unavailable'); self.assertIn('unexamined', remaining['reason'])
+                                self.assertNotIn('native', remaining); self.assertNotIn('observation', remaining)
+                                with self.assertRaises(ValueError): plans.validate_selection(report['plan'], [remaining['id']])
+                                self.assertEqual(report['plan']['assessment_digest'], plans.digest(assessment))
+                                self.assertEqual(report['plan']['digest'], plans.digest({k:v for k,v in report['plan'].items() if k != 'digest'}))
+                                if kind:
+                                    lineage = report['git_lineage']; expected = git_inventory._lineage_result(claim=request.get('integration'))
+                                    self.assertEqual(lineage['status'], 'not_examined'); self.assertEqual(lineage['binding'], {})
+                                    self.assertEqual(lineage['integration'], expected['integration'])
+                                    self.assertEqual(lineage['patch_equivalence'], expected['patch_equivalence'])
+                                    self.assertEqual(lineage['limitations'], expected['limitations'])
+                                    for key in ('retention', 'ancestry', 'recovery', 'release', 'current_use'):
+                                        self.assertEqual(lineage[key], expected[key])
+        self.assertEqual(before, self.survivors()); self.assertEqual(target, (review.file_identity(self.target.stat()), self.target.read_bytes()))
 
     def test_file_v5_manifest_outputs_reject_protected_and_alias_destinations(self):
         manifest = {'schema_version': 1, 'resources': [{'path': str(self.target), 'origin': 'helper-created',
@@ -294,13 +390,18 @@ class ExactFilePortable(ExactFileFixture):
             cache = copy.deepcopy(historical['candidates'][1])
             cache['consumers'] = [{'id': 'fixture', 'state': 'released', 'basis': ['decision']}]
             path = npm_cache.effect_paths(cache['npm'])[0]
-            for state in ('active', 'unknown'):
-                file = copy.deepcopy(self.spec); file['path'] = str(path); file['consumers'][0]['state'] = state
-                document = {'schema_version': 5, 'references': self.references, 'candidates': [cache, file]}
-                with patch.object(npm_cache, 'inspect', side_effect=AssertionError('protective obligation lost before native acquisition')):
-                    result = plans.review_scope(path.parents[3], assessment=document)
-                row = next(r for r in result['candidates'] if r.get('operation') == 'npm-cache-remove')
-                self.assertEqual(row['assessment'], 'Keep' if state == 'active' else 'Review')
+            for state in ('active', 'unknown', 'history'):
+                file = copy.deepcopy(self.spec); file['path'] = str(path); file['consumers'][0]['state'] = state if state != 'history' else 'released'
+                manifest = {'schema_version': 1, 'resources': [{'path': str(path), 'origin': 'helper-created', 'purpose': 'retained fixture', 'association': 'fixture', 'consumers': ['fixture'], 'retention': ['required original'], 'release_checkpoint': 'old'}]} if state == 'history' else None
+                for candidates in ([cache, file], [file, cache]):
+                    document = {'schema_version': 5, 'references': self.references, 'candidates': candidates}
+                    with patch.object(npm_cache, 'inspect', side_effect=AssertionError('protective obligation lost before native acquisition')):
+                        result = plans.review_scope(path.parents[3], assessment=document, manifest=manifest)
+                    row = next(r for r in result['candidates'] if r.get('operation') == 'npm-cache-remove')
+                    self.assertEqual(row['assessment'], 'Review' if state == 'unknown' else 'Keep')
+                    self.assertEqual(result['plan']['assessment_digest'], plans.digest(document))
+                    self.assertEqual(result['plan']['manifest_digest'], plans.digest(manifest))
+                    with self.assertRaises(ValueError): plans.validate_selection(result['plan'], [row['id']])
         finally: contract.doCleanups()
 
     def test_file_final_read_drift_and_cancellation_close_descriptors(self):
@@ -388,6 +489,79 @@ class ExactFilePortable(ExactFileFixture):
             result = exact_file.review_file(self.target, max_content_bytes=1, timeout=2)
         self.assertFalse(result['content']['complete']); self.assertTrue(opened); self.assertTrue(all(count == 0 for count in opened.values()))
 
+    def test_file_growth_overflow_accounts_acquisition_and_closes_descriptors(self):
+        from devspace import exact_file
+        self.assertEqual(self.row(self.reviewed())['assessment'], 'Eligible')
+        before = self.survivors(); opened = {}; acquisitions = []; grew = [False]
+        real_open, real_close, real_read = os.open, os.close, os.read
+        def opening(*args, **kwargs):
+            fd = real_open(*args, **kwargs); opened[fd] = opened.get(fd, 0) + 1; return fd
+        def closing(fd): opened[fd] -= 1; return real_close(fd)
+        def reading(fd, amount):
+            chunk = real_read(fd, amount); acquisitions.append(len(chunk))
+            if chunk and not grew[0]:
+                grew[0] = True
+                with self.target.open('ab') as stream: stream.write(PAYLOAD)
+            return chunk
+        facade = types.SimpleNamespace(**{**vars(os), 'open': opening, 'close': closing, 'read': reading,
+                                          'unlink': lambda *args, **kwargs: self.fail('review performed an effect')})
+        with patch.object(exact_file, 'os', facade):
+            result = self.reviewed(max_content_bytes=len(PAYLOAD))
+        row = self.row(result)
+        self.assertTrue(grew[0]); self.assertFalse(row['observation']['complete'])
+        self.assertEqual(row['assessment'], 'Unavailable')
+        self.assertEqual(result['content']['read_bytes'], len(PAYLOAD) + 1)
+        self.assertEqual(sum(acquisitions), len(PAYLOAD) + 1)
+        self.assertEqual(acquisitions, [len(PAYLOAD), 1])
+        self.assertTrue(opened); self.assertTrue(all(count == 0 for count in opened.values()))
+        with self.assertRaises(ValueError): plans.validate_selection(result['plan'], [row['id']])
+        self.assertEqual(self.target.read_bytes(), PAYLOAD + PAYLOAD); self.assertEqual(before, self.survivors())
+
+    def test_file_true_intermediate_substitution_and_observe_unknown(self):
+        from devspace import exact_file
+        prefix = self.project / 'intermediate'; parent = prefix / 'parent'; parent.mkdir(parents=True)
+        self.target.rename(parent / 'output.txt'); self.target = parent / 'output.txt'; self.spec['path'] = 'intermediate/parent/output.txt'
+        sibling = prefix / 'retained.txt'; sibling.write_bytes(b'intermediate sibling')
+        control = self.reviewed(); row = self.row(control); self.assertEqual(row['assessment'], 'Eligible')
+        before = self.survivors((parent, self.target)); prefix_state = self.survivors((prefix,))[str(prefix.relative_to(self.base))]
+        sibling_state = (review.file_identity(sibling.stat()), sibling.read_bytes())
+        moved = self.project / 'old-intermediate'; calls = [0]; last = exact_file._last
+        def replace(*args):
+            calls[0] += 1
+            if calls[0] == 2:
+                prefix.rename(moved); prefix.mkdir(); (moved / 'parent').rename(parent)
+                self.assertEqual(before, self.survivors((parent, self.target)))
+            return last(*args)
+        with patch.object(exact_file, '_last', side_effect=replace): result = self.reviewed()
+        self.assertEqual(self.row(result)['assessment'], 'Unavailable'); self.assertFalse(self.row(result)['observation']['complete'])
+        self.assertEqual(before, self.survivors((parent, self.target)))
+        self.assertEqual(prefix_state, self.survivors((moved,))[str(moved.relative_to(self.base))])
+        self.assertEqual(sibling_state, (review.file_identity((moved / 'retained.txt').stat()), (moved / 'retained.txt').read_bytes()))
+        with patch.object(exact_file, 'os', types.SimpleNamespace(**{**vars(os), 'read': lambda *args: self.fail('observation payload read')})):
+            self.assertEqual(exact_file.observe(row), 'unknown')
+            prefix.rename(self.project / 'replacement-intermediate')
+            self.assertEqual(exact_file.observe(row), 'unknown')
+        self.assertEqual((self.project / 'replacement-intermediate/parent/output.txt').read_bytes(), PAYLOAD)
+        self.assertTrue(moved.is_dir())
+
+    def test_file_real_reference_hardlink_alias_refuses_before_payload(self):
+        from devspace import exact_file
+        alias = self.records / 'reference-alias.txt'; os.link(self.target, alias)
+        self.assertTrue(alias.samefile(self.target)); self.assertEqual(self.target.stat().st_nlink, 2)
+        before = self.survivors((self.target, alias, self.project))
+        document = copy.deepcopy(self.assessment)
+        document['references']['source'] = {'path': str(alias), 'sha256': hashlib.sha256(PAYLOAD).hexdigest()}
+        real_open = os.open
+        def opening(name, *args, **kwargs):
+            if name == self.target.name: self.fail('multiply linked target payload opened')
+            return real_open(name, *args, **kwargs)
+        with patch.object(exact_file, 'os', types.SimpleNamespace(**{**vars(os), 'open': opening, 'read': lambda *args: self.fail('hardlink payload read')})):
+            result = self.reviewed(document)
+        row = self.row(result); self.assertEqual(row['assessment'], 'Unavailable')
+        self.assertFalse(row['observation']['complete']); self.assertEqual(result['content']['read_bytes'], 0)
+        with self.assertRaises(ValueError): plans.validate_selection(result['plan'], [row['id']])
+        self.assertEqual(before, self.survivors((self.target, alias, self.project)))
+
     def test_file_selection_overlap_and_reference_aliases(self):
         document = copy.deepcopy(self.assessment); document['candidates'].append(copy.deepcopy(self.spec))
         with self.assertRaises(ValueError): plans.review_scope(self.project, assessment=document)
@@ -414,6 +588,100 @@ class ExactFilePortable(ExactFileFixture):
             document['candidates'] = rows
             result = self.reviewed(document)
             self.assertFalse(all(r['assessment'] == 'Eligible' for r in result['candidates'] if r.get('operation') == 'file-remove'))
+
+    def test_file_old_provider_cancellation_meaning_is_unchanged(self):
+        import base64
+        from devspace import docker_cleanup, npm_cache
+        cache = self.base / 'old-cache'; cache.mkdir()
+        docker = {'operation': 'docker-image-remove', 'docker': {'endpoint': 'unix://' + str(self.base / 'old.sock'), 'id': 'sha256:' + 'a' * 64}}
+        npm = {'operation': 'npm-cache-remove', 'npm': {'cache': str(cache), 'key': 'old-entry', 'integrity': 'sha512-' + base64.b64encode(hashlib.sha512(PAYLOAD).digest()).decode()}}
+        for version, provider in ((3, docker), (4, docker), (4, npm)):
+            with self.subTest(version=version, operation=provider['operation']), patch.object(docker_cleanup, 'inspect', side_effect=AssertionError('cancelled provider acquired')), patch.object(npm_cache, 'inspect', side_effect=AssertionError('cancelled cache acquired')):
+                document = {'schema_version': version, 'references': {}, 'candidates': [provider]}
+                with self.assertRaisesRegex(ValueError, 'cancellation'):
+                    plans.review_scope(self.project, assessment=document, cancelled=lambda: True)
+
+    def test_file_full_provider_state_path_matrix(self):
+        from test_docker_cleanup import LegacyContainerContracts
+        from devspace import docker_cleanup, npm_cache
+        contract = LegacyContainerContracts()
+        try:
+            for operation in ('docker-image-remove', 'npm-cache-remove'):
+                fixture, _, _, _, assessment, base_native = contract.fixture(version=4, companion=operation)
+                original_spec = copy.deepcopy(assessment['candidates'][1])
+                if operation != 'npm-cache-remove':
+                    # Existing supported Docker contract fixture, never a daemon.
+                    from test_docker_cleanup import SupportedDocker
+                    with patch.object(docker_cleanup, 'LocalDocker', SupportedDocker):
+                        base_native = docker_cleanup.inspect(original_spec['docker'], operation)
+                for path_kind in (('control', 'effect', 'cache', 'tool', 'config') if operation == 'npm-cache-remove' else ('control', 'socket', 'tool', 'config')):
+                    with self.subTest(operation=operation, path_kind=path_kind):
+                        native = copy.deepcopy(base_native); provider = copy.deepcopy(original_spec)
+                        refs = {**assessment['references'], **{'file-' + key: value for key, value in self.references.items()}}
+                        target = self.target; scope = self.project
+                        if operation == 'npm-cache-remove':
+                            cache = Path(provider['npm']['cache'])
+                            if path_kind == 'effect':
+                                target = npm_cache.effect_paths(provider['npm'])[0]; scope = fixture.base
+                                refs['file-source'] = assessment['references']['source']
+                                self.assertEqual(target.read_bytes(), b'ordinary fixture library\n')
+                            elif path_kind == 'cache':
+                                target = cache / 'retained-output.txt'; target.write_bytes(PAYLOAD); target.chmod(0o644); scope = fixture.base
+                            elif path_kind == 'tool': native['tools']['node'] = str(target)
+                            elif path_kind == 'config':
+                                root = self.project / 'npm-tools'; root.mkdir(exist_ok=True)
+                                target = root / 'npmrc'; target.write_bytes(PAYLOAD); target.chmod(0o644)
+                                native['tools'].update(root=str(root), npm=str(root / 'bin/npm-cli.js'), configuration='global mode; user/global config disabled')
+                                native['tools']['files'] = {'npmrc': {'identity': plans.file_identity(target.stat()), 'sha256': hashlib.sha256(PAYLOAD).hexdigest()}}
+                            native['cache_identity'] = plans.file_identity(cache.stat())
+                            native['store_identity'] = plans.file_identity((cache / '_cacache').stat())
+                        else:
+                            if path_kind == 'socket':
+                                # Declared socket path is synthetic contract data;
+                                # no real socket/daemon or provider qualification.
+                                provider['docker']['endpoint'] = 'unix://' + str(target)
+                                native['resource']['endpoint'] = provider['docker']['endpoint']
+                                native['provider']['endpoint'] = provider['docker']['endpoint']
+                            elif path_kind == 'tool': native['provider']['executable'] = str(target)
+                            elif path_kind == 'config':
+                                root = self.project / 'docker-config'; root.mkdir(exist_ok=True)
+                                target = root / 'retained-output.txt'; target.write_bytes(PAYLOAD); target.chmod(0o644)
+                                native['provider']['configuration_directory'] = str(root)
+                            expected = fixture.records / ('native-' + path_kind + '.json')
+                            expected.write_text(json.dumps({'schema_version': 1, 'native_digest': plans.digest(native)}))
+                            key = provider['content']['reference']
+                            refs[key] = {'path': str(expected), 'sha256': hashlib.sha256(expected.read_bytes()).hexdigest()}
+                        file = copy.deepcopy(self.spec); file['path'] = str(target)
+                        for key in ('content', 'recovery', 'consumer_scope', 'release'):
+                            file[key]['basis'] = ['file-' + item for item in file[key].get('basis', [])]
+                        file['content'] = {'method': 'source-files', 'files': {target.name: 'file-source'}, 'basis': ['file-decision']}
+                        file['recovery']['inputs'] = ['file-source']
+                        for consumer in file['consumers']: consumer['basis'] = ['file-' + item for item in consumer['basis']]
+                        isolated = plans.review_scope(scope, assessment={'schema_version': 5, 'references': refs, 'candidates': [file]})
+                        isolated_file = self.row(isolated); self.assertEqual(isolated_file['assessment'], 'Eligible', isolated_file)
+                        target_before = (review.file_identity(target.stat()), target.read_bytes())
+                        for reverse in (False, True):
+                            candidates = [file, provider] if not reverse else [provider, file]
+                            document = {'schema_version': 5, 'references': refs, 'candidates': candidates}
+                            def forbidden(*args, **kwargs): self.fail('unexpected real provider acquisition')
+                            with patch.object(docker_cleanup, 'LocalDocker', side_effect=forbidden), patch.object(docker_cleanup, 'inspect', side_effect=(lambda *args, **kwargs: native) if operation != 'npm-cache-remove' else forbidden), patch.object(npm_cache, 'inspect', side_effect=(lambda *args, **kwargs: native) if operation == 'npm-cache-remove' else forbidden):
+                                report = plans.review_scope(scope, assessment=document)
+                            file_row = self.row(report); provider_row = next(r for r in report['candidates'] if r.get('operation') == operation)
+                            self.assertEqual(provider_row['assessment'], 'Eligible', provider_row)
+                            self.assertEqual(report['plan']['assessment_digest'], plans.digest(document))
+                            selected = [isolated_file, provider_row] if not reverse else [provider_row, isolated_file]
+                            frozen = copy.deepcopy(report['plan']); frozen['candidates'] = selected
+                            frozen['digest'] = plans.digest({k:v for k,v in frozen.items() if k != 'digest'})
+                            if path_kind == 'control':
+                                self.assertEqual(file_row['assessment'], 'Eligible')
+                                self.assertEqual(plans.validate_selection(frozen, [r['id'] for r in selected]), selected)
+                            else:
+                                if path_kind in ('effect', 'cache'): self.assertEqual(file_row['assessment'], 'Keep')
+                                with self.assertRaisesRegex(ValueError, 'overlaps required'):
+                                    plans.validate_selection(frozen, [r['id'] for r in selected])
+                                with self.assertRaises(ValueError): plans.validate_selection(report['plan'], [r['id'] for r in selected])
+                            self.assertEqual(target_before, (review.file_identity(target.stat()), target.read_bytes()))
+        finally: contract.doCleanups()
 
     def test_file_provider_state_protection_both_orders(self):
         from test_docker_cleanup import LegacyContainerContracts
@@ -664,11 +932,13 @@ class ExactFileNativeCleanup(ExactFileFixture):
 
     def test_file_native_exact_one_unlink_preserves_survivors(self):
         from devspace import exact_file
-        before = self.survivors(); parent = cleanup._stable(self.project.stat())
-        security = (self.project.stat().st_uid, self.project.stat().st_gid, self.project.stat().st_flags)
         other = self.project / 'other'; other.mkdir(); (other / 'keep').write_bytes(b'other directory survivor')
         link = self.project / 'symlink'; link.symlink_to(self.records / 'source.txt')
-        hard = self.project / 'hard'; hard.write_bytes(b'pair'); os.link(hard, self.project / 'hard-alias')
+        hard = self.project / 'hard'; hard.write_bytes(b'pair'); alias = self.project / 'hard-alias'; os.link(hard, alias)
+        self.assertTrue(hard.samefile(alias)); self.assertEqual(hard.stat().st_nlink, 2)
+        extras = (other, other / 'keep', link, hard, alias)
+        before = self.survivors(extras); parent = cleanup._stable(self.project.stat())
+        security = (self.project.stat().st_uid, self.project.stat().st_gid, self.project.stat().st_flags)
         original_unlink = os.unlink; calls = []
         def unlink(name, *args, **kwargs):
             if name == self.target.name:
@@ -678,7 +948,7 @@ class ExactFileNativeCleanup(ExactFileFixture):
             result = self.run_apply()
         self.assertEqual(result['outcome'], 'completed', result)
         self.assertEqual(len(calls), 1); self.assertIsInstance(calls[0][1], int)
-        self.assertFalse(self.target.exists()); self.assertEqual(before, self.survivors())
+        self.assertFalse(self.target.exists()); self.assertEqual(before, self.survivors(extras))
         self.assertEqual(parent, cleanup._stable(self.project.stat()))
         self.assertEqual(security, (self.project.stat().st_uid, self.project.stat().st_gid, self.project.stat().st_flags))
         self.assertEqual((other / 'keep').read_bytes(), b'other directory survivor')
@@ -707,8 +977,17 @@ class ExactFileNativeCleanup(ExactFileFixture):
                     before = case.survivors(); parent = cleanup._stable(case.project.stat())
                     report, pp, ap = case.saved(); ids = [r['id'] for r in report['candidates'] if r['assessment'] == 'Eligible']
                     self.assertEqual(len(ids), 2)
-                    with patch.object(cleanup, '_state_path', return_value=case.base / 'private-state'), patch.object(cleanup, '_confirm', return_value=True):
+                    from devspace import exact_file
+                    selected_files = [r for r in report['candidates'] if r['id'] in ids and r['operation'] == 'file-remove']
+                    expected = {(Path(r['path']).name, Path(r['path']).parent.stat().st_ino) for r in selected_files}
+                    calls = []; unlink = os.unlink
+                    def counted(name, *args, **kwargs):
+                        calls.append((name, os.fstat(kwargs['dir_fd']).st_ino)); return unlink(name, *args, **kwargs)
+                    facade = types.SimpleNamespace(**{**vars(os), 'unlink': counted})
+                    with patch.object(cleanup, '_state_path', return_value=case.base / 'private-state'), patch.object(cleanup, '_confirm', return_value=True), patch.object(exact_file, 'os', facade):
                         result = cleanup.apply(pp, ap, ids)
+                    self.assertEqual(len(calls), len(selected_files)); self.assertEqual(set(calls), expected)
+                    self.assertTrue(all(calls.count(item) == 1 for item in expected))
                     self.assertEqual(result['outcome'], 'completed', result)
                     self.assertFalse(case.target.exists()); self.assertFalse(second.exists())
                     self.assertEqual(before, case.survivors()); self.assertEqual(parent, cleanup._stable(case.project.stat()))
@@ -721,14 +1000,24 @@ class ExactFileNativeCleanup(ExactFileFixture):
         try:
             _, historical, _, _, _, _ = contract.fixture(version=4)
             legacy = historical['candidates'][0]
+            other = self.project / 'other'; other.mkdir(); (other / 'keep').write_bytes(b'other directory survivor')
+            link = self.project / 'symlink'; link.symlink_to(self.records / 'source.txt')
+            hard = self.project / 'hard'; hard.write_bytes(b'pair'); alias = self.project / 'hard-alias'; os.link(hard, alias)
             report = self.reviewed(); file = self.row(report)
+            extras = (self.target, self.project, other, other / 'keep', link, hard, alias)
             for selected in ([file, legacy], [legacy, file]):
                 plan = copy.deepcopy(report['plan']); plan['candidates'] = selected
                 plan['digest'] = plans.digest({k: v for k, v in plan.items() if k != 'digest'})
                 pp = self.base / 'legacy.json'; pp.write_text(json.dumps(plan)); ap = self.base / 'assessment.json'; ap.write_text(json.dumps(self.assessment))
+                before = self.survivors(extras)
+                reference_paths = [Path(reference['path']) for reference in legacy['references'].values()]
+                references_before = {str(path): (review.file_identity(path.stat()), path.read_bytes()) for path in reference_paths}
                 with patch.object(cleanup, '_state_path', return_value=self.base / 'private-state'), patch.object(cleanup, '_confirm', side_effect=AssertionError('confirmation before refusal')), patch.object(docker_cleanup, 'LocalDocker', side_effect=AssertionError('provider before refusal')):
                     with self.assertRaisesRegex(ValueError, docker_cleanup.CONTAINER_REMOVAL_UNAVAILABLE_REASON): cleanup.apply(pp, ap, [r['id'] for r in selected])
-                self.assertEqual(self.target.read_bytes(), PAYLOAD)
+                self.assertEqual(before, self.survivors(extras))
+                self.assertEqual(references_before, {str(path): (review.file_identity(path.stat()), path.read_bytes()) for path in reference_paths})
+                self.assertFalse(list((self.base / 'private-state').glob('*.intent.json')))
+                self.assertFalse((self.base / 'private-state/pending.json').exists())
         finally: contract.doCleanups()
 
     def test_file_pre_and_post_confirmation_drift_preserves_batch(self):
@@ -885,6 +1174,25 @@ class ExactFileNativeCleanup(ExactFileFixture):
         with patch.object(cleanup, '_state_path', return_value=self.base / 'private-state'), patch.object(cleanup, '_confirm', return_value=True), patch.object(cleanup.State, 'write', fail_intent):
             with self.assertRaises(OSError): cleanup.apply(pp, ap, ids)
         self.assertTrue(self.target.exists())
+        pending_case = ExactFileFixture(); pending_case.setUp(); self.addCleanup(pending_case.doCleanups)
+        pending_report, pending_pp, pending_ap = pending_case.saved(); pending_ids = [pending_case.row(pending_report)['id']]
+        before_pending = pending_case.survivors((pending_case.target, pending_case.project)); durable_intents = []
+        def fail_pending(state, name, value):
+            if name == 'pending.json':
+                paths = list(state.path.glob('*.intent.json')); self.assertEqual(len(paths), 1)
+                durable = json.loads(paths[0].read_text()); self.assertEqual(durable['outcome'], 'intent')
+                self.assertEqual(durable['targets'][0]['outcome'], 'not-started')
+                durable_intents.append(paths[0]); raise OSError('pending creation failed after durable intent')
+            return write(state, name, value)
+        facade = types.SimpleNamespace(**{**vars(os), 'unlink': lambda *args, **kwargs: self.fail('unlink before pending durability')})
+        with patch.object(cleanup, '_state_path', return_value=pending_case.base / 'private-state'), patch.object(cleanup, '_confirm', return_value=True), patch.object(cleanup.State, 'write', fail_pending), patch.object(exact_file, 'remove', side_effect=AssertionError('effect before pending durability')), patch.object(exact_file, 'os', facade):
+            with self.assertRaisesRegex(OSError, 'pending creation'): cleanup.apply(pending_pp, pending_ap, pending_ids)
+        self.assertEqual(len(durable_intents), 1); self.assertTrue(durable_intents[0].exists())
+        self.assertFalse((pending_case.base / 'private-state/pending.json').exists())
+        self.assertEqual(before_pending, pending_case.survivors((pending_case.target, pending_case.project)))
+        # No retry is performed on the pending-write fixture; its durable orphan
+        # intent remains until owned fixture teardown. The original independent
+        # fixture below exercises its separately confirmed interruption case.
         unlink = exact_file.remove
         def interrupted(row, limits): unlink(row, limits); raise KeyboardInterrupt
         with patch.object(cleanup, '_state_path', return_value=self.base / 'private-state'), patch.object(cleanup, '_confirm', return_value=True), patch.object(exact_file, 'remove', side_effect=interrupted):
@@ -983,6 +1291,79 @@ class ExactFileNativeCleanup(ExactFileFixture):
         self.assertEqual(parent, tuple(getattr(self.project.stat(), key) for key in ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_flags')))
         self.assertEqual(pair, (review.file_identity(hard.stat()), hard.read_bytes(), hard.stat().st_nlink))
         self.assertEqual(os.readlink(link), str(self.records / 'source.txt'))
+        document = copy.deepcopy(self.assessment)
+        document['references']['source'] = {'path': str(alias), 'sha256': hashlib.sha256(PAYLOAD).hexdigest()}
+        reader = plans._read_file
+        def reference_read(path, *args, **kwargs):
+            if str(path) == str(alias): self.fail('case alias reference payload acquired')
+            return reader(path, *args, **kwargs)
+        with patch.object(plans, '_read_file', side_effect=reference_read): result = self.reviewed(document)
+        row = self.row(result); self.assertEqual(row['assessment'], 'Review')
+        self.assertTrue(row['observation']['complete']); self.assertEqual(row['observation']['identity']['nlink'], 1)
+        with self.assertRaises(ValueError): plans.validate_selection(result['plan'], [row['id']])
+        self.assertEqual(before, self.survivors()); self.assertEqual(target, (exact_file._identity(self.target.stat()), self.target.read_bytes()))
+
+    def test_file_true_intermediate_last_unlink_boundary(self):
+        from devspace import exact_file
+        prefix = self.project / 'intermediate'; parent = prefix / 'parent'; parent.mkdir(parents=True)
+        self.target.rename(parent / 'output.txt'); self.target = parent / 'output.txt'; self.spec['path'] = 'intermediate/parent/output.txt'
+        sibling = prefix / 'retained.txt'; sibling.write_bytes(b'intermediate sibling')
+        report = self.reviewed(); row = self.row(report); self.assertEqual(row['assessment'], 'Eligible')
+        before = self.survivors((parent, self.target)); old_prefix = self.survivors((prefix,))[str(prefix.relative_to(self.base))]
+        old_sibling = (review.file_identity(sibling.stat()), sibling.read_bytes())
+        moved = self.project / 'old-intermediate'; preflight = exact_file._preflight
+        def substitute(parent_fd, descriptor):
+            preflight(parent_fd, descriptor)
+            prefix.rename(moved); prefix.mkdir(); (moved / 'parent').rename(parent)
+            self.assertEqual(before, self.survivors((parent, self.target)))
+        facade = types.SimpleNamespace(**{**vars(os), 'unlink': lambda *args, **kwargs: self.fail('intermediate replacement reached unlink')})
+        with patch.object(exact_file, '_preflight', side_effect=substitute), patch.object(exact_file, 'os', facade):
+            with self.assertRaises(ValueError): exact_file.remove(row, report['plan']['policy']['limits'])
+        self.assertEqual(before, self.survivors((parent, self.target)))
+        self.assertEqual(old_prefix, self.survivors((moved,))[str(moved.relative_to(self.base))])
+        self.assertEqual(old_sibling, (review.file_identity((moved / 'retained.txt').stat()), (moved / 'retained.txt').read_bytes()))
+        self.assertEqual(exact_file.observe(row), 'unknown')
+
+    def test_file_completed_intermediate_guard_precedes_unrelated_later_effect(self):
+        from devspace import exact_file
+        prefix = self.project / 'intermediate'; parent = prefix / 'parent'; parent.mkdir(parents=True)
+        self.target.rename(parent / 'output.txt'); self.target = parent / 'output.txt'; self.spec['path'] = 'intermediate/parent/output.txt'
+        second = self.add_second(); second_state = (review.file_identity(second.stat()), second.read_bytes())
+        before = self.survivors((parent,)); report, pp, ap = self.saved()
+        ids = [r['id'] for r in report['candidates'] if r['assessment'] == 'Eligible']; self.assertEqual(len(ids), 2)
+        remove = exact_file.remove; calls = []; moved = self.project / 'old-intermediate'
+        def substituted(row, limits):
+            calls.append(row['path']); remove(row, limits)
+            prefix.rename(moved); prefix.mkdir(); (moved / 'parent').rename(parent)
+        with patch.object(cleanup, '_state_path', return_value=self.base / 'private-state'), patch.object(cleanup, '_confirm', return_value=True), patch.object(exact_file, 'remove', side_effect=substituted):
+            result = cleanup.apply(pp, ap, ids)
+        self.assertEqual(calls, [str(self.target)])
+        self.assertEqual(result['outcome'], 'partial-or-failed'); self.assertEqual(result['targets'][0]['outcome'], 'removed')
+        self.assertEqual(result['targets'][1]['outcome'], 'not-started')
+        self.assertFalse(self.target.exists()); self.assertEqual(second_state, (review.file_identity(second.stat()), second.read_bytes()))
+        self.assertEqual(before, self.survivors((parent,))); self.assertTrue(moved.is_dir())
+        self.assertTrue((self.base / 'private-state/pending.json').exists())
+
+    def test_file_original_plan_input_is_preserved_before_revalidation(self):
+        from devspace import exact_file
+        # A real old plan is retained independently before making the file copy.
+        # Replacing that copy with the newer frozen plan is deliberate fixture
+        # drift, never forged eligibility or a suggested production workflow.
+        old = self.reviewed()['plan']; source = self.records / 'retained-old-plan.json'
+        source.write_bytes(plans.canonical_json(old)); source.chmod(0o644)
+        original = self.project / 'original-plan.json'; original.write_bytes(source.read_bytes()); original.chmod(0o644)
+        spec = copy.deepcopy(self.spec); spec['path'] = original.name
+        spec['content'] = {'method': 'source-files', 'files': {original.name: 'old-plan'}, 'basis': ['decision']}
+        spec['recovery']['inputs'] = ['old-plan']
+        refs = {**self.references, 'old-plan': {'path': str(source), 'sha256': hashlib.sha256(source.read_bytes()).hexdigest()}}
+        document = {'schema_version': 5, 'references': refs, 'candidates': [spec]}
+        report = self.reviewed(document); row = self.row(report); self.assertEqual(row['assessment'], 'Eligible')
+        original.write_text(json.dumps(report['plan'])); ap = self.base / 'original-plan-assessment.json'; ap.write_text(json.dumps(document))
+        before = self.survivors((original, source, self.project))
+        with patch.object(cleanup, '_state_path', return_value=self.base / 'private-state'), patch.object(cleanup, '_revalidate', side_effect=AssertionError('selected original plan reached revalidation')), patch.object(exact_file, 'remove', side_effect=AssertionError('selected original plan reached effect')):
+            with self.assertRaisesRegex(ValueError, 'transaction inputs'): cleanup.apply(original, ap, [row['id']])
+        self.assertEqual(before, self.survivors((original, source, self.project)))
+        self.assertFalse(list((self.base / 'private-state').glob('*.intent.json')))
 
     def test_file_native_cli_pty_selection_binding(self):
         import pty, re, select, signal, time
