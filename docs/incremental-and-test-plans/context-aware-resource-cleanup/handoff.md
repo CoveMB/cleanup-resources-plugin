@@ -1,8 +1,8 @@
 # Context-aware resource cleanup: continuation handoff
 
-The follow-up was paused on 20 October 2026, reconciled on 29 October against `d7ead1f`, and explicitly resumed by the user on 9 November. The [continuation status](plan.md#continuation-status--9-november-2026) is authoritative for the current candidate `9aa8fb4`, separate I02 branch, remaining dependency order and authorization boundary.
+The follow-up was paused on 20 October 2026, reconciled on 29 October against `d7ead1f`, and explicitly resumed by the user on 9 November. The [continuation status](plan.md#continuation-status--9-november-2026) is authoritative for the resumed candidate with I01 and integrated I02 source, remaining dependency order and authorization boundary.
 
-Use the actual candidate source as the baseline: I01 is implemented here; I02 is separately unmerged; I03–I07 remain backlog. Do not revive old owner assignments, checkout instructions, acceptance decisions or private evaluation permissions.
+Use the actual candidate source as the baseline: I01 and I02 source are implemented here, with combined acceptance pending; I03–I07 remain backlog. Do not revive old owner assignments, checkout instructions, acceptance decisions or private evaluation permissions.
 
 The [design](../../superpowers/specs/2026-10-19-context-aware-resource-cleanup-design.md) is the single requirements owner. [plan.md](plan.md) records current support versus the proposal and I01–I08. [qa-plan.md](qa-plan.md) owns deterministic/native/installed/model/practical evidence, including the still-missing paired comparison.
 
