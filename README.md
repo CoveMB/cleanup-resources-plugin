@@ -1,6 +1,6 @@
 # Cleanup Resources Plugin
 
-Task, project, configured global and general local disk-cleanup investigation through one agent skill and a standalone Python helper, with installation guidance for Codex, OpenCode v2 and Antigravity. Reviews produce assessed frozen plans. Separately confirmed cleanup supports exact eligible directories, ordinary linked Git worktrees, selected local Docker resources and supported singleton npm cache entries on tested local macOS/APFS capabilities. The agent stops after review; the user operates cleanup in their own terminal. Installed observations apply only to their identified runtime subject. Start with a prioritized read-only review; selected cleanup and practical outcomes are recorded only when actually performed.
+Task, project, configured global and general local disk-cleanup investigation through one agent skill and a standalone Python helper, with installation guidance for Codex, OpenCode v2 and Antigravity. Reviews produce assessed frozen plans. Separately confirmed cleanup supports exact eligible regular output files and directories, ordinary linked Git worktrees, selected local Docker resources and supported singleton npm cache entries on tested local macOS/APFS capabilities. The agent stops after review; the user operates cleanup in their own terminal. Installed observations apply only to their identified runtime subject. Start with a prioritized read-only review; selected cleanup and practical outcomes are recorded only when actually performed.
 
 ## Install the skill
 
@@ -118,7 +118,7 @@ After explicit invocation of `task-disk-review`, a request such as “help me fr
 
 The [skill procedure](skills/task-disk-review/SKILL.md) owns category selection, relevance and finite history-read limits. Missing tools, denied/truncated history and reached limits remain visible; they preserve affected uncertain resources without preventing useful recommendations elsewhere. Native context coverage is separate from the helper's configured filesystem/provider coverage. Supplied fictional records can demonstrate interpretation, not native retrieval or desktop invocation. Existing installed observations below retain their original subjects and do not establish this broader journey.
 
-Broader investigation adds no cleanup operation. Specialized application-cache and whole-project/source deletion, individual-file/archive removal, pnpm maintenance and unsupported provider operations remain unavailable. The report distinguishes these from existing guarded operations and excludes them from executable savings. No whole-account dump, private conversation-store scan, owner messaging or historical consent reuse is introduced.
+Broader investigation adds no cleanup operation. Specialized application-cache and whole-project/source deletion, general archive/source-file removal, pnpm maintenance and unsupported provider operations remain unavailable. The report distinguishes these from existing guarded operations and excludes them from executable savings. No whole-account dump, private conversation-store scan, owner messaging or historical consent reuse is introduced.
 
 ## Global coverage and provider storage
 
@@ -198,6 +198,53 @@ Source examples: A rebuildable output and C ordinary nested dependencies can qua
 Common credentials/`.env`, databases, `.wrangler`, history, required originals, unique/modified/offline dependencies and unresolved consumers cannot be overridden by accepted loss or release statements. Protected state payloads are not read. Generic evidence is initially Keep; an explicitly assessed disposable nested output can qualify while required originals remain protected. Custom sensitive state may be unrecognized and must be preserved by assessment.
 
 Frozen plans bind host identity, exact target/contents, a separate descendant-identity digest, evidence/assessment digests, effects, holds/exclusions, review scope identities and preconditions. Candidates containing another eligible candidate’s checked evidence or rebuild inputs stay Review; narrow the plan to preserve those references. Keep the original assessment, optional manifest/configuration and referenced sources outside every selected target for revalidation and recovery. A batch that contains another selected item's required evidence or rebuild input refuses before mutation. Plans contain compact metadata/digests, not inspected payloads or bulk content inventories. Material changes require a new plan, including identical-content nested replacements or changed shared-file identities. Existing v1 directory plans retain their original meaning and apply/reconcile semantics; incomplete older review plans still require regeneration. V2 explicitly distinguishes directory and native operations and rejects unknown types/versions. Data validation alone cannot authorize removal. Separate exact-plan human confirmation remains mandatory. No automatic backup or universal undo is promised.
+
+## Exact regular output files (v5)
+
+An explicit v5 `file-remove` assessment adds one literal regular output file to the existing review, selection, terminal confirmation and recovery journey. It unlinks that exact leaf once and preserves its parent, useful siblings and retained evidence/rebuild inputs. No wildcard expansion, parent deletion, link/hardlink removal, media matching or “equivalent replacement” rule exists. File discovery alone never creates an eligible candidate. Source, dependencies, credentials, databases, original failures, persistent/unique state and unresolved consumers stay protected. Container execution remains unavailable under the existing policy, including in a mixed v5 plan.
+
+The agent prepares the assessment from selected existing evidence. An existing inventory must contain exactly one normalized file entry: the literal leaf basename, `kind: "file"`, permission mode, logical byte size and complete SHA-256. Alternatively, `source-files` maps exactly that basename to an independently retained source when the actual generator copies it verbatim; no directory entries. Do not create an inventory from the target, copy it elsewhere to qualify, or ask the user to produce technical attestations. Matching bytes do not authenticate provenance or establish release.
+
+For example, if retained generation records establish that `build/report.txt` is a verbatim copy of a retained source, adapt the existing reference IDs and absolute reference paths/digests:
+
+```json
+{
+  "schema_version": 5,
+  "references": {
+    "source": {"path": "/retained/report-source.txt", "sha256": "<actual complete SHA-256>"},
+    "record": {"path": "/retained/generation-and-release.txt", "sha256": "<actual complete SHA-256>"}
+  },
+  "candidates": [{
+    "operation": "file-remove", "path": "build/report.txt", "category": "output",
+    "purpose": "generated copy after its consumer finished",
+    "content": {"method": "source-files", "files": {"report.txt": "source"}, "basis": ["record"]},
+    "recovery": {"kind": "rebuild", "inputs": ["source"], "basis": ["record"], "explanation": "documented copy from retained source"},
+    "consumers": [{"id": "report-consumer", "state": "released", "basis": ["record"]}],
+    "consumer_scope": {"basis": ["record"], "unresolved": []},
+    "release": {"checkpoint": "consumer completed and released this output", "basis": ["record"]},
+    "findings": []
+  }]
+}
+```
+
+The equivalent existing inventory envelope is `{"schema_version":1,"entries":[{"path":"report.txt","kind":"file","mode":420,"size":26,"sha256":"<actual complete SHA-256>"}]}`; the size/mode/digest must describe that independently recorded output, with no extra entries. Replace all placeholders with observed facts from the scoped evidence. Task/project paths are literal paths within the chosen scope; global paths are absolute. V5 also composes the existing directory, linked-worktree, Docker and npm meanings. Saved v1–v4 plans retain their meanings and cannot contain file operations; readers reject unsupported versions/fields.
+
+Use the existing commands and explicitly selected file ID:
+
+```sh
+python3 skills/task-disk-review/scripts/devspace.py review --task "/selected/project" \
+  --assessment "/retained/assessment-v5.json" --json --plan-output "/outside/file-plan.json"
+python3 skills/task-disk-review/scripts/devspace.py apply --plan "/outside/file-plan.json" \
+  --assessment "/retained/assessment-v5.json" --select FILE_ID
+python3 skills/task-disk-review/scripts/devspace.py apply --plan "/outside/file-plan.json" --cancel
+python3 skills/task-disk-review/scripts/devspace.py reconcile --plan "/outside/file-plan.json"
+```
+
+Selection and cancellation are apply flags. The agent stops at the handoff; the user runs apply in their own terminal and inspects the exact operation/effect/identity binding before fresh confirmation. The fixed effect says either “rebuild required” or “accepted loss, no undo promised”; accepted loss still requires independent content and complete consumer/release evidence. Output plans/manifests must remain outside protected targets and review roots and cannot overwrite an existing destination.
+
+File observations bind its complete bytes, single-link target identity/security fields, every ancestor from `/` through the parent, and observed mount identities. Links, special files, changed ancestors/inodes, additional hardlinks, unsupported locality, known sync paths, incomplete reads and changed evidence refuse. Ancestor bindings omit timestamps and directory link counts so legitimate sibling removal can proceed while identity/security changes still stop the batch. Actual mutation requires the same local macOS/APFS permission/durability capabilities as existing cleanup; this candidate still requires its own supported-host qualification. Linux review tests and skipped Mac cases do not certify native effects.
+
+Private receipts contain compact identity and a binding digest, never payloads, purpose prose or ancestor paths. Before each later effect, a completed file must remain absent beneath all retained bound ancestors. Reconciliation is observation-only: `absent-parent-retained`, `same-identity-contents-unverified`, `replaced` or `unknown`. Missing/replaced ancestors mean unknown, and observed absence does not prove that the helper caused it. There is no retry authority, rollback or automatic backup. Repeated checking and the advisory helper lock cannot make unlink conditional on an inode against an unrelated same-account writer; the final check/unlink race, unknown synchronization/consumers and semantic assessment limits remain.
 
 ## Selected cleanup in your terminal
 
@@ -320,11 +367,11 @@ Only a single SHA-512 entry with **no other live key sharing its integrity** is 
 
 Use the existing exact selection, user-operated terminal confirmation, durable private receipts and observation-only `reconcile` commands. The native operation constructs one literal key argument internally, without force, broad purge, GC or filesystem fallback. Timeouts/refusals leave uncertain results and stop remaining work. Reconciliation distinguishes absent key/content, partial effects and replacement/unknown identity; it never retries removal. Receipts contain digests, sizes and outcomes, excluding raw keys, URLs, headers, paths and payloads. There is no universal undo; later builds/downloads may cost more and need a network connection.
 
-Ordinary generated/temp outputs, including unregistered resources, use the existing independent complete-content comparison and guarded exact-directory path. Names/age never establish eligibility. Preserve active, modified, offline-only, original-failure, unique and uncertain neighboring data. Pip HTTP stores, editor/application caches, arbitrary toolchains and unsupported npm layouts remain report-only. Disposable native fixtures establish this component's effects and controls; combined installed CLI/desktop behavior and real-project usefulness remain separate acceptance work.
+Ordinary generated/temp directories, including unregistered resources, use the existing independent complete-content comparison and guarded exact-directory path. Independently evidenced regular output files use the v5 contract above. Names/age never establish eligibility. Preserve active, modified, offline-only, original-failure, unique and uncertain neighboring data. Pip HTTP stores, editor/application caches, arbitrary toolchains and unsupported npm layouts remain report-only. Disposable native fixtures establish this component's effects and controls; combined installed CLI/desktop behavior and real-project usefulness remain separate acceptance work.
 
 ## Evidence input
 
-Assessment JSON has `schema_version: 1`, a `references` dictionary and a `candidates` list. For a requested saved assessment or cleanup plan, the agent prepares it from the task investigation above and relevant existing records; users need no form or technical attestation. Context notes are attributed interpretation, never an independent content baseline. Relevant native history follows the skill's bounded investigation procedure; the Python helper has no history loader and private transcript/database access remains unsupported.
+The base directory assessment uses `schema_version: 1`, a `references` dictionary and a `candidates` list. Typed versions 2–4 retain their operation-specific contracts above; v5 composes those meanings and adds exact regular output files. For a requested saved assessment or cleanup plan, the agent prepares it from the task investigation above and relevant existing records; users need no form or technical attestation. Context notes are attributed interpretation, never an independent content baseline. Relevant native history follows the skill's bounded investigation procedure; the Python helper has no history loader and private transcript/database access remains unsupported.
 
 References map IDs to `{"path":"/selected/record","sha256":"actual-64-hex-digest"}`. Paths are selected absolute regular files outside targets. Finalize referenced notes and restrictive permissions before hashing and helper review/freeze, then leave bound references unchanged. Even same-mode `chmod` can change `ctime` and invalidate their saved identities; regenerate dependent review/plan data after any bound input changes before a reusable handoff. One candidate's shape is illustrated below; placeholders are not evidence:
 

@@ -105,9 +105,10 @@ def _overlap(first, second):
     return _inside(first, second) or _inside(second, first)
 
 
-def _evidence_conflict(first, second):
+def _evidence_conflict(first, second, *, filesystem_targets_only=False):
     return any(_inside(Path(reference["path"]), Path(target["path"]))
                for candidate, target in ((first, second), (second, first))
+               if not filesystem_targets_only or target.get("operation", "directory-remove") in {"directory-remove", "git-worktree-remove", "file-remove"}
                for reference in candidate.get("references", {}).values())
 
 
@@ -171,6 +172,20 @@ def _validate_assessment(assessment):
     """Shape/bounds only. This deliberately does not evaluate source prose."""
     if not isinstance(assessment, dict) or type(assessment.get("schema_version")) is not int:
         raise ValueError("assessment version must be an integer")
+    if assessment["schema_version"] == 5:
+        if set(assessment) != {"schema_version", "references", "candidates"} or not isinstance(assessment["candidates"], list) or len(assessment["candidates"]) > MAX_CANDIDATES:
+            raise ValueError("unsupported version 5 assessment")
+        files, others = [], []
+        for candidate in assessment["candidates"]:
+            if not isinstance(candidate, dict):
+                raise ValueError("candidate must be an object")
+            if candidate.get("operation") == "file-remove":
+                files.append({key: value for key, value in candidate.items() if key != "operation"})
+            else:
+                others.append(candidate)
+        _validate_assessment({**assessment, "schema_version": 1, "candidates": files})
+        _validate_assessment({**assessment, "schema_version": 4, "candidates": others})
+        return
     if isinstance(assessment, dict) and type(assessment.get("schema_version")) is int and assessment["schema_version"] == 4:
         from .npm_cache import validate_assessment
         return validate_assessment(assessment)
@@ -353,6 +368,9 @@ def _assess(row, specification, references, snapshot, historical, deadline):
             row["effect"] = "permanent removal of this exact directory; accepted loss, no undo promised"
         else:
             raise _AssessmentUnresolved("adequate rebuild/recovery evidence unresolved")
+        if row.get("operation") == "file-remove":
+            from .exact_file import EFFECTS
+            row["effect"] = EFFECTS[recovery["kind"]]
         unresolved_reason = "consumer evidence unresolved"
         scope = specification.get("consumer_scope", {})
         basis(scope, "consumer scope evidence missing")
@@ -372,6 +390,8 @@ def _assess(row, specification, references, snapshot, historical, deadline):
         basis(release, "release evidence missing")
         if not release.get("checkpoint") or not specification.get("purpose") or row["category"] not in ({"worktree"} if row.get("operation") == "git-worktree-remove" else {"output", "dependencies"}):
             raise _AssessmentUnresolved("purpose/category/release checkpoint unresolved")
+        if row.get("operation") == "file-remove" and row["category"] != "output":
+            raise _AssessmentUnresolved("exact files require output category")
         row.update(assessment="Eligible", reason="complete comparison and evidence-backed content/use/release/recovery assessment")
     except _AssessmentUnresolved as error:
         row.update(assessment="Review", reason=str(error))
@@ -413,9 +433,9 @@ def review_scope(selected, *, npm_caches=(), git_lineage=None, **options):
         if options.get("mode", "task") not in {"project", "global"}:
             raise ValueError("Git lineage requires project or global review")
     assessment = options.get("assessment")
-    if assessment and assessment.get("schema_version") == 4:
+    if assessment and assessment.get("schema_version") in (4, 5):
         _validate_assessment(assessment)
-        remaining = {**assessment, "schema_version": 3,
+        remaining = {**assessment, "schema_version": 5 if assessment["schema_version"] == 5 else 3,
                      "candidates": [row for row in assessment["candidates"] if not npm_cache.is_npm_cache(row)]}
         report = _review_docker_scope(selected, **{**options, "assessment": remaining})
         old = report["plan"]
@@ -455,7 +475,7 @@ def review_scope(selected, *, npm_caches=(), git_lineage=None, **options):
     cache_roots = [specification["npm"]["cache"] for specification in (assessment or {}).get("candidates", [])
                    if npm_cache.is_npm_cache(specification)] + list(npm_caches)
     for row in report["candidates"]:
-        if row.get("operation", "directory-remove") in {"directory-remove", "git-worktree-remove"} and any(
+        if row.get("operation", "directory-remove") in {"directory-remove", "git-worktree-remove", "file-remove"} and any(
                 _overlap(Path(row["path"]), Path(cache)) for cache in cache_roots):
             row.update(assessment="Keep", reason="selected npm cache state never enters directory/worktree removal")
     if cache_roots:
@@ -509,13 +529,13 @@ def review_scope(selected, *, npm_caches=(), git_lineage=None, **options):
 def _review_docker_scope(selected, **options):
     """Version 3 adds separately typed provider rows; old producers stay intact."""
     assessment = options.get("assessment")
-    if not assessment or assessment.get("schema_version") != 3:
+    if not assessment or assessment.get("schema_version") not in (3, 5):
         return _review_scope(selected, **options)
     from . import docker_cleanup
     _validate_assessment(assessment)
     started = time.monotonic()
     timeout = options.get("timeout", 10.0)
-    filesystem = {**assessment, "schema_version": 2,
+    filesystem = {**assessment, "schema_version": 5 if assessment["schema_version"] == 5 else 2,
                   "candidates": [row for row in assessment["candidates"] if not docker_cleanup.is_docker(row)]}
     report = _review_scope(selected, **{**options, "assessment": filesystem})
     provider_ids = set()
@@ -621,11 +641,11 @@ def _review_scope(selected, *, mode="task", assessment=None, manifest=None, hold
                "purpose": specification.get("purpose"), "assessment": "Review", "reason": "not assessed",
                "effect": "report only; no removal authorized", "references": {}, "comparison": None,
                "preconditions": ["same host/target/content/evidence/consumer/release conditions", "new plan on material drift", "separate exact-plan human confirmation"]}
-        typed = assessment["schema_version"] == 2
+        typed = assessment["schema_version"] in (2, 5)
         native = typed and specification["operation"] == "git-worktree-remove"
         if typed:
             row["operation"] = specification["operation"]
-        if native:
+        if native or row.get("operation") == "file-remove":
             row["id"] = digest({"operation": row["operation"], "path": str(path)})[:16]
         report["candidates"].append(row)
         if (not any(_inside(path, root) for root in roots) or (not native and any(_same_path(path, root) for root in roots)) or _same_path(path, Path.home())
@@ -648,9 +668,13 @@ def _review_scope(selected, *, mode="task", assessment=None, manifest=None, hold
             row.update(assessment="Unavailable", reason="global/candidate content inspection budget exhausted; remaining contents unknown")
             report["coverage"]["complete"] = False
             continue
-        snapshot = review_task(path, inspect_content=True, max_content_bytes=content_bytes_remaining, timeout=remaining(),
-                               exclusions=exclusions, cancelled=cancelled, max_entries=content_entries_remaining, max_depth=max_depth,
-                               worktree_marker=native_state["marker_identity"] if native_state else None)
+        if row.get("operation") == "file-remove":
+            from .exact_file import review_file
+            snapshot = review_file(path, max_content_bytes=content_bytes_remaining, timeout=remaining(), cancelled=cancelled)
+        else:
+            snapshot = review_task(path, inspect_content=True, max_content_bytes=content_bytes_remaining, timeout=remaining(),
+                                   exclusions=exclusions, cancelled=cancelled, max_entries=content_entries_remaining, max_depth=max_depth,
+                                   worktree_marker=native_state["marker_identity"] if native_state else None)
         content_entries_remaining -= snapshot["coverage"]["examined"]
         content_bytes_read += snapshot["content"]["read_bytes"]
         content_bytes_remaining = max(0, content_bytes_remaining - snapshot["content"]["read_bytes"])
@@ -663,6 +687,13 @@ def _review_scope(selected, *, mode="task", assessment=None, manifest=None, hold
                               "file_count": sum(entry["kind"] == "file" for entry in actual_entries),
                               "filesystem_local": snapshot.get("filesystem_local", False),
                               "size": snapshot["size"], "coverage": snapshot["coverage"]}
+        if row.get("operation") == "file-remove":
+            row["observation"]["file_binding"] = snapshot.get("file_binding")
+        if snapshot["cancelled"]:
+            report["cancelled"] = True
+            report["coverage"]["complete"] = False
+            row.update(assessment="Unavailable", reason="content inspection cancelled; remaining assessment unknown")
+            break
         if snapshot["invalid_scope"]:
             row.update(assessment="Unavailable", reason="target missing or unsupported")
             continue
@@ -721,10 +752,17 @@ def _review_scope(selected, *, mode="task", assessment=None, manifest=None, hold
 def freeze_review(report, assessment, manifest, holds, exclusions, limits):
     """Freeze the shared review contract; this never grants authorization."""
     eligible = [row for row in report["candidates"] if row["assessment"] == "Eligible"]
+    v5 = assessment is not None and assessment["schema_version"] == 5
+    filesystem = [row for row in eligible if not v5 or row.get("operation", "directory-remove") in {"directory-remove", "git-worktree-remove", "file-remove"}]
     for row in eligible:
-        if any(other is not row and _overlap(Path(row["path"]), Path(other["path"])) for other in eligible):
+        if v5 and row.get("operation") == "file-remove" and any(
+                _overlap(Path(row["path"]), Path(other["native"][key]))
+                for other in report["candidates"] if other.get("operation") == "git-worktree-remove" and "native" in other
+                for key in ("repository", "common_directory", "administration")):
+            row.update(assessment="Keep", reason="exact file overlaps retained native repository/recovery state")
+        elif row in filesystem and any(other is not row and _overlap(Path(row["path"]), Path(other["path"])) for other in filesystem):
             row.update(assessment="Review", reason="overlapping eligible targets; require a narrower plan")
-        elif any(other is not row and _evidence_conflict(row, other) for other in eligible):
+        elif any(other is not row and _evidence_conflict(row, other, filesystem_targets_only=v5) for other in eligible):
             row.update(assessment="Review", reason="eligible targets contain another candidate's evidence or rebuild inputs; require a narrower plan")
     report["limitations"][0] = "Discovery is metadata-only; separately assessed candidates include explicit bounded content comparison and agent interpretation."
     report["limitations"] = ["Reports contain metadata/digests, never inspected file payloads; inspect before sharing."
@@ -747,7 +785,7 @@ def freeze_review(report, assessment, manifest, holds, exclusions, limits):
             plan["scope_identities"][root] = {key: file_identity(metadata)[key] for key in ("device", "inode", "mode")}
         except OSError:
             plan["scope_identities"][root] = None
-    if plan["schema_version"] in (2, 3, 4):
+    if plan["schema_version"] in (2, 3, 4, 5):
         for row in plan["candidates"]:
             row.setdefault("operation", "directory-remove")
     plan["digest"] = digest(plan)
@@ -759,20 +797,22 @@ def validate_selection(plan, selected_ids, *, host=None):
     """Validate frozen selection data only; any cleanup executor must independently revalidate current state."""
     payload = {key: value for key, value in plan.items() if key != "digest"}
     if (plan.get("digest") != digest(payload) or plan.get("kind") != "frozen-review-not-authorization"
-            or type(plan.get("schema_version")) is not int or plan.get("schema_version") not in (1, 2, 3, 4)):
+            or type(plan.get("schema_version")) is not int or plan.get("schema_version") not in (1, 2, 3, 4, 5)):
         raise ValueError("changed or unsupported frozen plan")
     if plan["host"] != (host or new_report("", None, {})["host"]):
         raise ValueError("execution host differs")
-    if plan["schema_version"] in (2, 3, 4):
+    if plan["schema_version"] in (2, 3, 4, 5):
         from .docker_cleanup import OPERATIONS
         from .npm_cache import OPERATION
         allowed = {"id", "path", "host", "category", "project", "purpose", "assessment", "reason", "effect",
                    "references", "comparison", "preconditions", "operation", "native", "observation",
                    "assessment_basis", "specification_digest", "agent_assessment"}
         for row in plan["candidates"]:
-            operations = {"directory-remove", "git-worktree-remove"} | (OPERATIONS if plan["schema_version"] in (3, 4) else set()) | ({OPERATION} if plan["schema_version"] == 4 else set())
+            operations = {"directory-remove", "git-worktree-remove"} | (OPERATIONS if plan["schema_version"] in (3, 4, 5) else set()) | ({OPERATION} if plan["schema_version"] in (4, 5) else set()) | ({"file-remove"} if plan["schema_version"] == 5 else set())
             if set(row) - allowed or row.get("operation") not in operations:
                 raise ValueError("unknown frozen resource fields/operation")
+            if row["operation"] == "file-remove" and "native" in row:
+                raise ValueError("exact file cannot carry native identity")
             if row["operation"] == "directory-remove" and "native" in row:
                 raise ValueError("directory cannot carry native identity")
     rows = {row["id"]: row for row in plan["candidates"]}
@@ -785,16 +825,22 @@ def validate_selection(plan, selected_ids, *, host=None):
             raise ValueError("unknown or ineligible selection")
         from .docker_cleanup import is_docker, EFFECTS
         from .npm_cache import is_npm_cache
-        if plan["schema_version"] == 4 and is_npm_cache(row):
+        if plan["schema_version"] in (4, 5) and is_npm_cache(row):
             selected.append(row)
             continue
-        if plan["schema_version"] in (3, 4) and is_docker(row):
+        if plan["schema_version"] in (3, 4, 5) and is_docker(row):
             if row["effect"] != EFFECTS[row["operation"]] or row["host"] != plan["host"]:
                 raise ValueError("unsupported Docker effect/host")
             selected.append(row)
             continue
-        native = plan["schema_version"] in (2, 3, 4) and row.get("operation") == "git-worktree-remove"
-        if plan["schema_version"] in (2, 3, 4) and row.get("operation") not in {"directory-remove", "git-worktree-remove"}:
+        file = plan["schema_version"] == 5 and row.get("operation") == "file-remove"
+        if file:
+            from .exact_file import validate_row
+            validate_row(row)
+            if any(_overlap(Path(row["path"]), Path(path)) for path in (*plan["policy"]["holds"], *plan["policy"]["exclusions"])):
+                raise ValueError("exact file is held/excluded")
+        native = plan["schema_version"] in (2, 3, 4, 5) and row.get("operation") == "git-worktree-remove"
+        if plan["schema_version"] in (2, 3, 4, 5) and row.get("operation") not in ({"directory-remove", "git-worktree-remove", "file-remove"} if plan["schema_version"] == 5 else {"directory-remove", "git-worktree-remove"}):
             raise ValueError("unknown typed operation")
         path = Path(row["path"])
         if (str(path) != os.path.abspath(path) or not any(_inside(path, Path(root)) for root in plan["scope_roots"])
@@ -803,12 +849,13 @@ def validate_selection(plan, selected_ids, *, host=None):
                 or any(protection(part)[1] for part in path.parts)):
             raise ValueError("protected or uncontained target")
         from .git_worktree import EFFECT
-        valid_effect = row["effect"] == EFFECT if native else row["effect"].startswith("permanent removal of this exact directory;")
+        valid_effect = True if file else row["effect"] == EFFECT if native else row["effect"].startswith("permanent removal of this exact directory;")
         if not valid_effect or row["host"] != plan["host"]:
             raise ValueError("unsupported effect/host")
         if any(not is_docker(other) and not is_npm_cache(other) and _overlap(path, Path(other["path"])) for other in selected):
             raise ValueError("overlapping selected targets")
-        if _evidence_conflict(row, row) or any(_evidence_conflict(row, other) for other in selected):
+        if (_evidence_conflict(row, row, filesystem_targets_only=plan["schema_version"] == 5)
+                or any(_evidence_conflict(row, other, filesystem_targets_only=plan["schema_version"] == 5) for other in selected)):
             raise ValueError("selected target contains another selection's evidence or rebuild inputs")
         selected.append(row)
     # Evidence/rebuild inputs for an earlier item must survive later selections.
@@ -817,20 +864,34 @@ def validate_selection(plan, selected_ids, *, host=None):
         if any(_inside(Path(reference["path"]), Path(target["path"]))
                for reference in row.get("references", {}).values() for target in selected if not is_docker(target) and not is_npm_cache(target)):
             raise ValueError("selected batch contains required evidence/rebuild inputs")
-    if plan["schema_version"] in (2, 3, 4):
+    if plan["schema_version"] in (2, 3, 4, 5):
         context = plan["review_context"]
         if context["mode"] in {"task", "project"} and any(
                 _inside(Path(context["selected"]), Path(target["path"])) for target in selected if not is_docker(target) and not is_npm_cache(target)):
             raise ValueError("selected target contains required review context; review from a retained repository checkout")
         for row in plan["candidates"]:
             if row.get("operation") == "git-worktree-remove" and "native" in row:
-                if any(_inside(Path(row["native"][key]), Path(target["path"]))
+                if any((_overlap(Path(row["native"][key]), Path(target["path"]))
+                        if plan["schema_version"] == 5 and target.get("operation") == "file-remove"
+                        else _inside(Path(row["native"][key]), Path(target["path"])))
                        for key in ("repository", "common_directory", "administration") for target in selected if not is_docker(target) and not is_npm_cache(target)):
                     raise ValueError("selected batch contains required native repository/recovery state")
-    if plan["schema_version"] in (3, 4):
+    if plan["schema_version"] in (3, 4, 5):
         from .docker_cleanup import validate_batch
-        validate_batch(plan, selected)
-    if plan["schema_version"] == 4:
+        if plan["schema_version"] == 5:
+            validate_batch(plan, [row for row in selected if not is_npm_cache(row)])
+            # Native cache effects are real paths; their display labels are not.
+            from .npm_cache import effect_paths
+            for cache in (row for row in selected if is_npm_cache(row)):
+                effects = effect_paths(cache["native"]["resource"])
+                for provider in (row for row in selected if is_docker(row)):
+                    native = provider["native"]
+                    protected = [native["resource"]["endpoint"][7:], native["provider"]["executable"], native["provider"]["configuration_directory"]]
+                    if any(_overlap(Path(path), effect) for path in protected for effect in effects):
+                        raise ValueError("selected cache effects overlap required provider state")
+        else:
+            validate_batch(plan, selected)
+    if plan["schema_version"] in (4, 5):
         from .npm_cache import validate_batch
         validate_batch(plan, selected)
     return selected
@@ -855,7 +916,22 @@ def _write_exclusive(destination, value, protected):
 def write_plan(destination, plan):
     if plan.get("digest") != digest({key: value for key, value in plan.items() if key != "digest"}):
         raise ValueError("invalid plan digest")
-    _write_exclusive(destination, plan, [row["path"] for row in plan["candidates"]] + plan["scope_roots"])
+    protected = [row["path"] for row in plan["candidates"]] + plan["scope_roots"]
+    if plan["schema_version"] == 5:
+        from .docker_cleanup import is_docker
+        from .npm_cache import is_npm_cache
+        protected = list(plan["scope_roots"])
+        for row in plan["candidates"]:
+            if is_docker(row):
+                if "native" in row:
+                    native = row["native"]
+                    protected.extend([native["resource"]["endpoint"][7:], native["provider"]["executable"], native["provider"]["configuration_directory"]])
+            elif is_npm_cache(row):
+                if "native" in row:
+                    protected.append(row["native"]["resource"]["cache"])
+            else:
+                protected.append(row["path"])
+    _write_exclusive(destination, plan, protected)
 
 
 def write_manifest(destination, manifest, scope_roots=()):

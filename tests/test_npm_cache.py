@@ -433,7 +433,7 @@ class CacheInputContracts(unittest.TestCase):
             for candidate in invalid:
                 with self.subTest(candidate=candidate), self.assertRaises(ValueError):
                     npm_cache.validate_resource(candidate)
-            for version in (True, 4.0, "4", 5):
+            for version in (True, 4.0, "4", 999):
                 with self.subTest(version=version), self.assertRaises(ValueError):
                     plans._validate_assessment({"schema_version": version, "references": {}, "candidates": []})
 
