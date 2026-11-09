@@ -1,6 +1,6 @@
 # Context-aware resource cleanup: review notes
 
-Reconciled on 29 October 2026 against source baseline `d7ead1f`. This record preserves material design/review lessons without reproducing private dispatches or historical authority.
+Reconciled on 29 October 2026 against source baseline `d7ead1f`; status updated on 9 November after explicit resumption. See [continuation status](plan.md#continuation-status--9-november-2026) for source inclusion and remaining acceptance. This record preserves material design/review lessons without reproducing private dispatches or historical authority.
 
 ## Requirements retained
 
@@ -20,4 +20,4 @@ The [QA plan](qa-plan.md) therefore keeps Q09 paired comparison and Q10 two exis
 
 Independent read-only review of the seven original follow-up records identified conflicting paused/active instructions, off-branch delivery claims and private operational references. This reconciliation removes those publication blockers while retaining requirements and unfulfilled acceptance obligations.
 
-The original design's three review scopes—requirement fidelity, architecture/simplicity and verification/safety—remain future implementation obligations. This documentation review is not a new implementation acceptance, runtime/model test, provider trial or permission to resume the program.
+The original design's three independent review scopes—requirement fidelity, architecture/simplicity and verification/safety—apply sequentially to every resumed increment. This status reconciliation is not their completion, a runtime/model test, provider trial or installed/practical acceptance. Implementation authority comes from the user's 9 November resumption, not from historical reviews.

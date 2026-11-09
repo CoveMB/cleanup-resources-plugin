@@ -1,6 +1,6 @@
 # Context-aware resource cleanup: source-plan index
 
-Status: historical source plan, superseded for planning detail; future work remains paused.
+Status: historical source plan, superseded for planning detail. Implementation resumed on 9 November 2026; use the [continuation status](../../incremental-and-test-plans/context-aware-resource-cleanup/plan.md#continuation-status--9-november-2026) for implemented source, backlog and acceptance limits.
 
 The original task sequence is preserved as I01–I08 in the [incremental plan](../../incremental-and-test-plans/context-aware-resource-cleanup/plan.md): task-context assessment, general/history investigation, worktree lineage, exact files, assessed generated outputs, assessed containers, pnpm maintenance and combined installed/practical acceptance.
 

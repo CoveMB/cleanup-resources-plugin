@@ -333,4 +333,4 @@ Tests create disposable filesystem/Git fixtures with local refs and no external 
 
 The ZIP's explicit allowlist includes the manifest, README, one skill/UI resource and stdlib helper modules. It excludes source design, private planning/evidence, tests, Git and bytecode; the builder never overwrites. Inspect actual contents before distribution/installation. Licensing remains undecided; an open PR is not a release, host certification or human acceptance.
 
-Repository-only development records under `docs/` distinguish this implementation from the paused context-aware cleanup proposal. They are excluded from the runtime ZIP; this README contains the runtime guidance needed by the skill.
+Repository-only development records under `docs/` track the resumed context-aware cleanup implementation and its remaining acceptance obligations. They are excluded from the runtime ZIP; this README contains the runtime guidance needed by the skill.

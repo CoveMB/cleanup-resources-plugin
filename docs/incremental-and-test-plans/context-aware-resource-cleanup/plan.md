@@ -1,14 +1,25 @@
-# Context-aware resource cleanup: proposed incremental plan
+# Context-aware resource cleanup: incremental plan
 
-Status: paused future program. Reconciled on 29 October 2026 against source baseline `d7ead1f`. The current branch is the prospective merged baseline; implementation recorded on other branches is not current support and is not adopted by this document.
+Status: implementation resumed by the user on 9 November 2026, reconciled against candidate `9aa8fb4`. This updates the 29 October reconciliation against `d7ead1f`; source inclusion and acceptance remain separate.
 
-The [design](../../superpowers/specs/2026-10-19-context-aware-resource-cleanup-design.md) owns requirements. The [QA plan](qa-plan.md) owns acceptance and the [handoff](handoff.md) owns continuation status. Current runtime behavior remains in [README](../../../README.md).
+The [design](../../superpowers/specs/2026-10-19-context-aware-resource-cleanup-design.md) owns requirements. The [QA plan](qa-plan.md) owns acceptance and the [handoff](handoff.md) owns continuation instructions. Current runtime behavior remains in [README](../../../README.md).
 
-## Current support versus proposal
+## Continuation status — 9 November 2026
+
+| Increment | Current candidate and next obligation |
+| --- | --- |
+| I01: task-context assessment | Source is implemented in `9aa8fb4`: task-context guidance, specific assessment diagnostics and exclusion guards. Deterministic/hosted evidence exists for this subject; historical private model observations retain their original tested subjects. Installed/native/practical acceptance remains incomplete. |
+| I02: general/history investigation | Source exists separately at `6d268d6` on the unmerged `general-history-investigation` branch; it is not integrated here. Compare and integrate next, then verify the combined candidate. |
+| I03–I07 | Resumed implementation backlog in the dependency order below; these extensions are not delivered source in this candidate. |
+| I08: combined acceptance | Incomplete. Reconcile still-applicable feature evidence, paired comparison, installed journey and two practical read-only trials; do not infer acceptance from source presence. |
+
+The user's 9 November authorization resumes repository implementation with three sequential independent fresh-context reviews per increment: requirement fidelity, architecture/simplicity and verification/safety, on the same frozen candidate. Collect all three reports before repairs and renew affected coverage. It authorizes neither actual user-resource cleanup, client installations, release nor merges. Existing privacy, old-plan semantics, fresh terminal confirmation, ordinary versus managed lifecycle and real-evidence requirements remain binding. The [QA plan](qa-plan.md) records evidence limits; the [handoff](handoff.md) supplies continuation instructions.
+
+## Current support versus remaining proposal
 
 | Area | Current branch | Proposed change |
 | --- | --- | --- |
-| Task assessment | Explicit scope and supplied/current context; helper validates content/reference evidence | Reconstruct relevant task context through trusted native access and explain specific missing obligations |
+| Task assessment | I01 task-context investigation guidance, specific missing-obligation diagnostics and exclusion guards; helper validates content/reference evidence | Complete applicable investigator, installed/native/practical acceptance; no new eligibility method |
 | General/history investigation | Explicit configured global roots/providers; no automatic history discovery | Metadata-first bounded scope and relevant recent/archive history |
 | Worktree lineage | Bounded Git inventory and ordinary linked-worktree safeguards | Distinguish ancestry, patch/squash evidence, retained history and release |
 | Exact files | No top-level exact-file removal operation | Versioned file operation preserving mixed-directory siblings |
@@ -19,7 +30,7 @@ The [design](../../superpowers/specs/2026-10-19-context-aware-resource-cleanup-d
 
 ## Increment scopes and dependency order
 
-These scopes describe future work, not permission to execute or claims of completion. Reinspect actual callers and schema allocation before selecting files or helper names; earlier proposed identifiers are not architectural commitments.
+These scopes retain the dependency order and boundaries for resumed implementation; the status table above distinguishes implemented source from backlog and acceptance. Reinspect actual callers and schema allocation before selecting files or helper names; earlier proposed identifiers are not architectural commitments.
 
 | Increment | Outcome and likely canonical owners | Required boundary |
 | --- | --- | --- |
@@ -45,6 +56,6 @@ The shared dispatcher/schema paths require sequential integration unless write s
 
 ## Completion boundary
 
-None of I01–I08 is asserted delivered by this branch. Historical implementation and reviews elsewhere may be inputs to a separately authorized comparison, not substitutes for source inclusion or acceptance.
+I01 source is present; its remaining acceptance obligations are not closed. I02 remains outside this candidate, I03–I07 remain implementation backlog and I08 remains incomplete. Historical implementation and reviews elsewhere may inform comparison, but do not substitute for source inclusion or evidence on the actual candidate.
 
 Future closure needs the [QA obligations](qa-plan.md), explicit unsupported/gap reporting and the user's practical acceptance. A merge request, passing fixture suite or installed discovery alone cannot close investigation quality, provider safety or real-user usefulness.
