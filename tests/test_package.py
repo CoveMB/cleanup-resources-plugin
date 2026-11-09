@@ -14,6 +14,74 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PackageInvocation(unittest.TestCase):
+    def test_packaged_container_refusal_preserves_directory_control(self):
+        import copy
+        import test_plans
+        fixture = test_plans.AssessedPlans(); fixture.setUp(); self.addCleanup(fixture.doCleanups)
+        base = fixture.base
+        archive = base / "refusal-plugin.zip"
+        built = subprocess.run([str(Path(sys.executable).resolve()), "-B", str(ROOT / "scripts/build_package.py"), str(archive)],
+                               capture_output=True, text=True, timeout=15)
+        self.assertEqual(built.returncode, 0, built.stderr)
+        extracted = base / "extracted"
+        with zipfile.ZipFile(archive) as package:
+            self.assertFalse(any(".superpowers" in name or name.startswith("tests/") for name in package.namelist()))
+            package.extractall(extracted)
+        scripts = extracted / "skills/task-disk-review/scripts"
+        cli = scripts / "devspace.py"
+        # This extracted invocation's explicit absent-tool fixture is separate
+        # from normal suite discovery; no provider executable is manufactured.
+        empty_tools = base / "no-provider-tools"; empty_tools.mkdir()
+        environment = {**os.environ, "PATH": str(empty_tools)}
+        reason = "Container removal unavailable: complete absence of writable changes cannot be established; preserve this container."
+        before = fixture.bytes()
+        for version in (3, 4):
+            assessment = copy.deepcopy(fixture.assessment); assessment["schema_version"] = version
+            for item in assessment["candidates"]: item["operation"] = "directory-remove"
+            assessment["candidates"].append({"operation": "docker-container-remove", "docker": {
+                "endpoint": "unix://" + str(base / "nonexistent-daemon.sock"), "id": "a" * 64},
+                "category": "container", "purpose": "fictional old released container"})
+            ap, pp = base / f"assessment-v{version}.json", base / f"plan-v{version}.json"
+            ap.write_text(json.dumps(assessment))
+            arguments = ["review", "--project", str(fixture.project), "--assessment", str(ap), "--hold", str(fixture.project / "legacy")]
+            def invoke(*extra):
+                return subprocess.run([str(Path(sys.executable).resolve()), "-B", str(cli), *arguments, *extra],
+                                      env=environment, cwd=base, capture_output=True, text=True, timeout=20)
+            control_path = base / f"control-v{version}.json"
+            control_path.write_text(json.dumps({**assessment, "candidates": assessment["candidates"][:-1]}))
+            control = invoke("--assessment", str(control_path), "--json")
+            self.assertIn(control.returncode, (0, 2), control.stderr)
+            observed = invoke("--json", "--plan-output", str(pp))
+            # Absent optional Git may make metadata coverage partial (exit 2);
+            # an Unavailable container must not invent an additional exit rule.
+            self.assertEqual(observed.returncode, control.returncode, observed.stderr)
+            report = json.loads(observed.stdout)
+            container = next(row for row in report["candidates"] if row.get("operation") == "docker-container-remove")
+            self.assertEqual((container["assessment"], container["reason"], container["references"]), ("Unavailable", reason, {}))
+            self.assertNotIn("native", container); self.assertNotIn("observation", container)
+            directory = next(row for row in report["candidates"] if row["path"] == str(fixture.project / "A"))
+            self.assertEqual(directory["assessment"], "Eligible")
+            held = next(row for row in report["candidates"] if row["path"] == str(fixture.project / "legacy"))
+            self.assertEqual(held["assessment"], "Keep")
+            unknown = next(row for row in report["candidates"] if row["path"] == str(fixture.project / "D"))
+            self.assertEqual(unknown["assessment"], "Review")
+            self.assertEqual(json.loads(pp.read_text()), report["plan"])
+            text = invoke()
+            self.assertEqual(text.returncode, control.returncode, text.stderr); self.assertIn(reason, text.stdout)
+            # Exercise the extracted reader, rather than the test process's imports.
+            selection = "import json,sys; sys.path.insert(0,sys.argv[1]); from devspace import plans; plans.validate_selection(json.load(open(sys.argv[2])),[sys.argv[3]])"
+            for identifier, exit_code in ((container["id"], 1), (directory["id"], 0)):
+                selected = subprocess.run([str(Path(sys.executable).resolve()), "-B", "-c", selection, str(scripts), str(pp), identifier],
+                                          env=environment, cwd=base, capture_output=True, text=True, timeout=15)
+                self.assertEqual(selected.returncode, exit_code, selected.stderr)
+                if exit_code: self.assertIn("unknown or ineligible selection", selected.stderr)
+            assessment["candidates"][-1]["docker"]["command"] = "forbidden"
+            ap.write_text(json.dumps(assessment))
+            invalid = invoke("--json")
+            self.assertEqual(invalid.returncode, 1); self.assertEqual(invalid.stdout, "")
+        after = fixture.bytes()
+        for name, payload in before.items(): self.assertEqual(after[name], payload)
+
     def test_deliverable_excludes_private_material_and_runs_independently(self):
         with tempfile.TemporaryDirectory(prefix="task-review-package-") as temporary:
             base = Path(temporary).resolve()

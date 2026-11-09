@@ -1,6 +1,6 @@
 # Context-aware resource cleanup: incremental plan
 
-Status: implementation resumed by the user on 9 November 2026. I01 was reconciled against `9aa8fb4`; I02 source from `6d268d6` is integrated with the evidence-note guidance repair at `07e4407`. I03 has a reviewed implementation plan and is ready to begin. Source inclusion, review gates and acceptance remain separate.
+Status: implementation resumed by the user on 9 November 2026. I01 was reconciled against `9aa8fb4`; I02 source from `6d268d6` is integrated with the evidence-note guidance repair at `07e4407`. I03 Task 1 and Task 2 source are implemented; source-review repairs, hosted results and finite paired model observations are separately reconciled below and in the QA plan. The latest test-only repair has closed its affected source-review gates; the final hosted matrix passed all four jobs. Source inclusion, review gates and acceptance remain separate.
 
 The [design](../../superpowers/specs/2026-10-19-context-aware-resource-cleanup-design.md) owns requirements. The [QA plan](qa-plan.md) owns acceptance and the [handoff](handoff.md) owns continuation instructions. Current runtime behavior remains in [README](../../../README.md).
 
@@ -10,7 +10,7 @@ The [design](../../superpowers/specs/2026-10-19-context-aware-resource-cleanup-d
 | --- | --- |
 | I01: task-context assessment | Source is implemented in `9aa8fb4`: task-context guidance, specific assessment diagnostics and exclusion guards. Deterministic/hosted evidence exists for this subject; historical private model observations retain their original tested subjects. Installed/native/practical acceptance remains incomplete. |
 | I02: general/history investigation | Source and the `07e4407` guidance repair are integrated. Three independent source reviews and affected repair reviews passed. Hosted tests and bounded synthetic followups provide subject-specific evidence; [remaining acceptance limits](qa-plan.md#i02-evidence-reconciliation--9-november-2026) remain open. |
-| I03: worktree lineage | [Detailed implementation plan](i03-worktree-lineage.md) passed the three independent plan reviews and affected repair reviews. Ready for Task 1; lineage extensions are not implemented or accepted yet. |
+| I03: worktree lineage | Task 1 bound local lineage/recovery and Task 2 explicit merge/exact-delta comparisons are implemented. Three independent source reviews and affected production repairs closed before CI. The later test-only fixture repair has requirements and safety approval; architecture coverage carries for its unchanged runtime. The final hosted matrix passed all four jobs. [Evidence and limits](qa-plan.md#i03-evidence-reconciliation--9-november-2026); broader Q03/Q09 and practical acceptance remain incomplete. |
 | I04–I07 | Implementation backlog in the dependency order below; these extensions are not delivered source in this candidate. |
 | I08: combined acceptance | Incomplete. Reconcile still-applicable feature evidence, paired comparison, installed journey and two practical read-only trials; do not infer acceptance from source presence. |
 
@@ -22,7 +22,7 @@ The user's 9 November authorization resumes repository implementation with three
 | --- | --- | --- |
 | Task assessment | I01 task-context investigation guidance, specific missing-obligation diagnostics and exclusion guards; helper validates content/reference evidence | Complete applicable investigator, installed/native/practical acceptance; no new eligibility method |
 | General/history investigation | I02 bounded general investigation, explicit helper roots/providers and relevant supported recent/archive history guidance | Complete combined behavioral, installed/native and practical acceptance; no implicit helper scan or new cleanup operation |
-| Worktree lineage | Bounded Git inventory and ordinary linked-worktree safeguards; [I03 plan](i03-worktree-lineage.md) ready for implementation | Distinguish ancestry, patch/squash evidence, retained history and release |
+| Worktree lineage | Explicitly bound final-phase local lineage/recovery, caller-supplied merge claims and exact tree-entry-delta comparisons; ordinary linked-worktree guards remain | Complete broader Q03/Q09 and installed/practical acceptance; no authenticated provenance, semantic-preservation or release verdict |
 | Exact files | No top-level exact-file removal operation | Versioned file operation preserving mixed-directory siblings |
 | Generated output without baseline | Existing inventory/source comparison required | Narrow truthful assessed-output method with scoped accepted loss |
 | Writable/mounted containers | Current contracts reject mounts and writable changes | Separate assessed-container contract with safe inspection and mount/volume preservation |
@@ -44,6 +44,8 @@ These scopes retain the dependency order and boundaries for resumed implementati
 | I07: pnpm store maintenance | Narrow provider adapter plus existing configuration/plan/cleanup and package allowlist | After I06 and using I02 selected scope; native confinement/version proof, store-level policy/consent |
 | I08: combined installed/practical acceptance | Final package and shared behavior scenarios | I01–I07 applicable results, paired comparison reconciled, complete synthetic journey and separate practical trials |
 
+The [legacy container refusal correction](docker-legacy-container-refusal.md) has passed its three independent plan reviews and is present as an implemented candidate. Its implementation reviews, correction-specific hosted results and paired model evidence remain pending acceptance; I04 and I05 follow this correction. I06 still lacks a supported complete writable-content inventory; I07 still lacks native selected-store confinement/version proof. These prerequisites and I08 acceptance remain open.
+
 The shared dispatcher/schema paths require sequential integration unless write scopes are demonstrably independent. Each operation ships its complete validation/execution/documentation/preservation contract together. Code rollback cannot restore deleted bytes or retract disclosed context.
 
 ## Delivery requirements
@@ -57,6 +59,6 @@ The shared dispatcher/schema paths require sequential integration unless write s
 
 ## Completion boundary
 
-I01 and I02 source are present; I02 source-review gates and bounded followups are recorded in the [QA evidence reconciliation](qa-plan.md#i02-evidence-reconciliation--9-november-2026), while remaining acceptance obligations stay open. I03 is ready for implementation from its reviewed plan; I04–I07 remain backlog and I08 remains incomplete. Historical evidence does not substitute for source inclusion or verification on the actual candidate.
+I01 and I02 source are present; I02 source-review gates and bounded followups are recorded in the [QA evidence reconciliation](qa-plan.md#i02-evidence-reconciliation--9-november-2026), while remaining acceptance obligations stay open. I03 Task 1/Task 2 source and finite model evidence are present. The final hosted matrix passed; broader acceptance remains open. The conservative legacy-container refusal correction is implemented as a candidate with implementation reviews and correction-specific hosted/model acceptance pending, then I04/I05; I06/I07 prerequisites remain unsupported and I08 remains incomplete. Historical evidence does not substitute for source inclusion or verification on the actual candidate.
 
 Future closure needs the [QA obligations](qa-plan.md), explicit unsupported/gap reporting and the user's practical acceptance. A merge request, passing fixture suite or installed discovery alone cannot close investigation quality, provider safety or real-user usefulness.

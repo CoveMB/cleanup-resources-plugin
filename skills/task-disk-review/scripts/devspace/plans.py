@@ -541,7 +541,7 @@ def _review_docker_scope(selected, **options):
         provider_ids.add(row["id"])
         report["candidates"].append(row)
     old = report["plan"]
-    report["limitations"] = ["Provider stores stay outside generic directory cleanup; explicitly assessed Docker resources use native lifecycle. Package storage remains metadata-only."
+    report["limitations"] = ["Provider stores stay outside generic directory cleanup; container removal is unavailable, while explicitly assessed images/build-cache use their separate native lifecycles. Package storage remains metadata-only."
                              if item.startswith("Provider storage is report-only") else item for item in report["limitations"]]
     freeze_review(report, assessment, options.get("manifest"), old["policy"]["holds"],
                   old["policy"]["exclusions"], old["policy"]["limits"])

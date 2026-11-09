@@ -21,6 +21,17 @@ EFFECTS = {
     "docker-cache-remove": "permanent native removal of this exact reclaimable builder-cache record; later builds may cost more; no host-space guarantee",
 }
 
+CONTAINER_REMOVAL_UNAVAILABLE_REASON = "Container removal unavailable: complete absence of writable changes cannot be established; preserve this container."
+
+
+class _ContainerRemovalUnavailable(ValueError):
+    """The legacy operation lacks a complete no-writable-change predicate."""
+
+
+def require_removal_supported(operation: str) -> None:
+    if operation == "docker-container-remove":
+        raise _ContainerRemovalUnavailable(CONTAINER_REMOVAL_UNAVAILABLE_REASON)
+
 
 def is_docker(row):
     return row.get("operation") in OPERATIONS
@@ -264,24 +275,11 @@ def reclaimable_record(records, identifier):
 
 def inspect(resource, operation, *, timeout=10, cancelled=None):
     validate_resource(resource, operation)
+    require_removal_supported(operation)
     docker = LocalDocker(resource["endpoint"], timeout, cancelled)
     identifier = resource["id"]
     native = {"provider": docker.identity, "resource": resource, "operation": operation}
-    if operation == "docker-container-remove":
-        record = docker.container(identifier)
-        label = resource.get("ownership_label")
-        if label and (record["Config"].get("Labels") or {}).get(label["key"]) != label["value"]:
-            raise ValueError("container ownership label missing/changed")
-        if (record["State"]["Status"] not in {"created", "exited"} or record["State"]["Running"]
-                or record["State"]["Restarting"] or record["Mounts"] or record["HostConfig"].get("Binds")
-                or record["HostConfig"].get("VolumesFrom") or record["Config"].get("Volumes")
-                or type(record.get("SizeRw")) is not int or record["SizeRw"] < 0
-                or docker.read("container", "diff", identifier).strip()):
-            raise ValueError("running/mounted/changed writable data stays protected")
-        if docker.container_dependencies(identifier, record.get("Name", "")):
-            raise ValueError("container has retained native consumers")
-        native.update(state_digest=plans.digest(record), image=record["Image"], size=record["SizeRw"])
-    elif operation == "docker-image-remove":
+    if operation == "docker-image-remove":
         record = docker.image(identifier)
         label = resource.get("ownership_label")
         if label and (record["Config"].get("Labels") or {}).get(label["key"]) != label["value"]:
@@ -329,6 +327,9 @@ def review(specification, references, host, project, *, timeout, cancelled=None,
         row["observation"] = {"complete": True, "provider_size_bytes_estimate": native["size"], "identity": plans.digest(native)}
     except InspectionCancelled:
         raise
+    except _ContainerRemovalUnavailable:
+        row.update(assessment="Unavailable", reason=CONTAINER_REMOVAL_UNAVAILABLE_REASON)
+        return row
     except (ValueError, OSError, KeyError, TypeError, InspectionUnavailable):
         row.update(assessment="Unavailable", reason="Docker inspection unavailable or resource protected; preserve it")
         return row

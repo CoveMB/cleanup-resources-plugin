@@ -1,6 +1,6 @@
 # Cleanup Resources Plugin: implementation status
 
-Reconciled on 29 October 2026 against source baseline `d7ead1f`; continuation status updated on 9 November with I01 and integrated I02 source. This record replaces accumulated delivery checkpoints, not the product's runtime contract.
+Reconciled on 29 October 2026 against source baseline `d7ead1f`; continuation status updated on 9 November with I01, I02 and implemented I03 source. This record replaces accumulated delivery checkpoints, not the product's runtime contract.
 
 ## Owners and delivered scope
 
@@ -16,7 +16,7 @@ The [README](../../../README.md) owns installation, supported operations, config
 | I6: evidence capture guidance | Optional size advice and capture convention in reports | Smaller packets are not mandatory acceptance or evidence of safe disposal |
 | I7: combined release acceptance | Some historical installed observations exist | Combined installed journey, practical usefulness and human acceptance remain incomplete |
 | I8: native worktree cleanup | Selected ordinary linked Git worktrees with lifecycle/recovery guards | Managed, primary, pinned, shared or unknown lifecycle resources cannot be relabeled ordinary Git |
-| I9: native Docker cleanup | Selected local resources through narrow versioned native contracts | Current containers with mounts or writable changes are blocked |
+| I9: native Docker cleanup | Separate selected image/build-cache contracts; legacy container removal is unavailable | Complete absence of writable changes is unproved for all containers; old plans remain readable and pending intents reconcile by observation only |
 | I10: cache and temporary cleanup | Exact eligible directory cases and supported singleton npm cache entries | No general package-store pruning or pnpm operation |
 
 OpenCode v2 and Antigravity installation instructions and explicit-only skill metadata are included. Native client discovery and model behavior remain untested. These client routes do not broaden filesystem, provider or cleanup support.
@@ -34,6 +34,6 @@ OpenCode v2 and Antigravity installation instructions and explicit-only skill me
 
 The [QA plan](qa-plan.md) maps current behavior to existing checks and separates test results from installed/native/human evidence. The [compatibility record](compatibility-plan.md) owns platform and client gaps. Neither document authorizes new host provisioning, installation, provider operations or cleanup.
 
-The [context-aware continuation](../context-aware-resource-cleanup/plan.md#continuation-status--9-november-2026) is resumed: I01 task-context and I02 general/history source are integrated in this candidate, with combined acceptance pending; I03–I07 remain implementation backlog and I08 acceptance remains incomplete. Its status owner distinguishes source inclusion from evidence and authorization.
+The [context-aware continuation](../context-aware-resource-cleanup/plan.md#continuation-status--9-november-2026) is resumed: I01 task-context, I02 general/history and I03 local-lineage/comparison source are implemented, with [I03 source, hosted and finite model evidence](../context-aware-resource-cleanup/qa-plan.md#i03-evidence-reconciliation--9-november-2026) recorded and broader acceptance still pending. The [legacy container refusal correction](../context-aware-resource-cleanup/docker-legacy-container-refusal.md) has passed its three independent plan reviews and is next; its implementation remains pending, followed by I04/I05; I06 complete writable-inventory and I07 native-confinement prerequisites remain unsupported. I08 acceptance remains incomplete. Its status owner distinguishes source inclusion from evidence and authorization.
 
 Licensing remains undecided. Implementation presence, an open merge request and historical green checks do not establish release readiness or new cleanup permission.
