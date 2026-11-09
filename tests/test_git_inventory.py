@@ -60,7 +60,10 @@ class GitInventory(unittest.TestCase):
         self.git("-c", "commit.gpgsign=false", "commit", "-m", "Fixture baseline")
 
     def git(self, *arguments, cwd=None):
-        result = subprocess.run(["git", "--no-optional-locks", *arguments],
+        # Construction commits can launch detached maintenance even with optional locks disabled.
+        # Keep this isolation on fixture commands; the product's Git wrapper stays unchanged.
+        result = subprocess.run(["git", "--no-optional-locks", "-c", "maintenance.auto=false",
+                                 "-c", "gc.auto=0", *arguments],
                                 cwd=cwd or self.project, env=self.environment,
                                 capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
@@ -73,6 +76,15 @@ class GitInventory(unittest.TestCase):
         # User Git environment must not redirect discovery to an unrelated repository.
         with patch.dict(os.environ, self.environment, clear=True):
             return inventory_git(self.project, **limits)
+
+    def test_fixture_mutations_do_not_launch_auto_maintenance(self):
+        # Fixture writes must finish their work before complete read-only snapshots begin.
+        trace = self.fixture / "fixture-commit-trace.json"
+        with patch.dict(self.environment, {"GIT_TRACE2_EVENT": str(trace)}):
+            self.git("commit", "--allow-empty", "-m", "Isolated fixture empty commit")
+        events = [json.loads(line) for line in trace.read_text().splitlines()]
+        children = [event["argv"] for event in events if event.get("event") == "child_start"]
+        self.assertFalse(any("maintenance" in command or "gc" in command for command in children), children)
 
     def test_linked_state_and_local_unpushed_commits_preserve_all_bytes(self):
         upstream = self.git("rev-parse", "HEAD").strip().decode()
@@ -1187,12 +1199,14 @@ class GitInventory(unittest.TestCase):
         # Prove raw fixture size independently, then reach the actual bounded runner's cap.
         # Keep this source growth distinct from the bound current destination ref.
         self.git("checkout", "-b", "oversized-source")
-        long_path = "x"*240
-        directory = self.project
-        for _ in range(6):
-            directory /= long_path
-            directory.mkdir()
-        for number in range(800): (directory / str(number)).write_text("metadata limit\n")
+        # One short directory and 200-byte leaf names stay below Mac's path/component limits.
+        # More records produce the real >1 MiB response without requiring deep paths.
+        directory = self.project / "large-delta"
+        directory.mkdir()
+        self.assertLess(len(os.fsencode(directory / ("0000-"+"x"*195))), 768,
+                        "large-output fixture paths must fit the supported Mac path limit")
+        for number in range(3600):
+            (directory / (f"{number:04d}-"+"x"*195)).write_text("metadata limit\n")
         self.git("add", ".")
         self.git("commit", "-m", "Oversized metadata delta")
         large = self.git("rev-parse", "HEAD").strip().decode()
@@ -1200,11 +1214,13 @@ class GitInventory(unittest.TestCase):
         raw = self.git("diff-tree", "--no-commit-id", "--raw", "-r", "-z", "--no-renames",
                        "--no-ext-diff", "--no-textconv", "--abbrev=40", base, large, "--")
         self.assertGreater(len(raw), 1024*1024, "fixture must exceed the actual 1 MiB response cap")
+        self.assertEqual(raw.count(b"\0") // 2, 3600)
         self.git("update-ref", request["retained_ref"], large)
         self.git("checkout", "--detach", large, cwd=linked)
         request.update(expected_head=large, integration={**request["integration"], "source_commit": large,
                                                         "source_base_commit": base})
         record = next(row for row in self.inventory()["worktrees"] if row["path"] == str(linked))
+        self.assertTrue(record["status_complete"], "ordinary status must finish before the output-cap trial")
         attempted, refusals = [], []
         def bounded_delta(executable, directory, arguments, deadline, cancelled):
             if "diff-tree" not in arguments:
