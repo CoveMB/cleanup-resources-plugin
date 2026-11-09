@@ -62,6 +62,48 @@ Without assessment/context inputs, the terminal helper still reports observation
 
 Task mode stays within its selected directory. Project mode supports non-Git projects and inventories Git-discovered linked worktrees when the selected project is itself a worktree root. Nested selections do not expand into their parent repository. Discovery alone leaves worktrees report-only. Explicitly assessed ordinary linked Git checkouts support native removal below; branches are always retained. Status includes staged, dirty, untracked, ignored, locked, detached and locally unpushed states; missing upstream/activity stays unknown. No fetch occurs. Git status inspection refuses configured clean/process filters because even status can execute them, including unused global LFS filters. Submodule contents and collapsed ignored-directory contents are not inspected by Git inventory.
 
+### Explicit local Git lineage advisory
+
+For one already selected or discovered checkout, an agent can prepare a bounded binding document and add `--git-lineage FILE` to a project or configured global review:
+
+```sh
+python3 skills/task-disk-review/scripts/devspace.py review --project "/selected/repository" \
+  --git-lineage "/selected/private-notes/lineage.json" --json
+```
+
+```json
+{
+  "schema_version": 1,
+  "repository": "/selected/repository",
+  "path": "/selected/linked-checkout",
+  "expected_head": "0123456789abcdef0123456789abcdef01234567",
+  "retained_ref": "refs/heads/retained-topic",
+  "destination_ref": "refs/heads/explicit-integration-destination"
+}
+```
+
+The example OID is illustrative; the agent obtains the actual full current commit identity and explicit destination from scoped evidence. Paths must be absolute and lexically normalized; refs must be full literal `refs/heads/…` or `refs/remotes/…` names. SHA-1 and locally supported SHA-256 repositories retain their full OIDs. Task mode rejects this option. Unmatched or excluded targets are not acquired, and no destination is inferred from an upstream or branch name.
+
+This optional phase runs after ordinary discovery, all candidate/provider assessment, optional cache discovery and the last frozen-plan update, using only the remaining outer review budget. JSON `git_lineage` and text report the bound current HEAD/ref identities, independent retention and destination ancestry, and supported linked-worktree HEAD/reflog/ORIG_HEAD recovery reachability. Every distinct nonzero recovery root must directly name a commit. Primary recovery, private/unsupported administration, shallow or missing history, unavailable tools and incomplete final revalidation remain unknown. No author/message payloads are reported. Replacement objects are disabled; graft metadata is refused without reading its contents. Final binding and graph-policy checks detect persistent drift but do not make the observations atomic or certify every blob's availability.
+
+An optional `integration` field supplies one explicit historical claim. For a merge, use `{"kind": "merge", "source_commit": "FULL_SOURCE_COMMIT_OID", "destination_commit": "FULL_MERGE_COMMIT_OID"}`. For a squash or cherry-pick comparison, use `{"kind": "squash", "source_base_commit": "FULL_ANCESTRAL_BASE_COMMIT_OID", "source_commit": "FULL_SOURCE_COMMIT_OID", "destination_commit": "FULL_ONE_PARENT_COMMIT_OID"}`. Replace every placeholder with a full lowercase 40/64-character commit OID matching the observed object format. No other integration keys are accepted. A squash requires its explicit ancestral base; a missing, noncommit, unrelated or unavailable endpoint remains unresolved. The source may be older than the actual bound current HEAD.
+
+The helper reports these separate observations:
+
+| Observation | Meaning and limit |
+| --- | --- |
+| `source_matches_head`, `source_in_head` | Whether the supplied historical source is the actual current checkout HEAD, and whether it is an ancestor of that HEAD. An old merged source does not integrate later source commits. |
+| `source_in_parents`, `destination_parent_count` | For a real two-parent merge, source reachability through each parent in order. Other merge topology is unsupported. Graph facts do not authenticate the supplied record or its intent. |
+| `destination_in_current_destination`, `current_destination_commit` | Whether the claimed integration commit is reachable from the explicitly bound local destination, and that destination's actual current OID. |
+| `current_destination_matches_claim`, `current_destination_tree_matches_claim` | Commit identity and committed-tree identity are distinct facts. A later empty commit may change only the former; later work or a real revert can change the latter while ancestry remains true. |
+| `patch_equivalence.method`, `equal` and path counts | For a one-parent squash/cherry-pick claim, compare the source base-to-source delta with destination parent-to-destination delta using `exact-tree-entry-delta`. Both deltas must be nonempty. |
+
+The exact comparison sorts raw changed-tree records by path and compares `(old_mode, new_mode, old_oid, new_oid, path)`. It accepts at most 128 changed paths per side, under the remaining review deadline and the existing 1 MiB output limit per command. Git's internal traversal is not limited to 128 paths. Renames are represented as deletion/addition; gitlinks, malformed/truncated output and unsupported topology remain unknown. External diff and textconv are disabled, no blob/patch/message/author payloads are acquired, and no candidate search or patch-ID comparison runs. Whitespace changes, different base objects, modes or paths may yield `equal: false`; that means these exact deltas differ, not that a historical squash is disproved. Equal entries do not certify blob availability or recoverability.
+
+Every supplied historical record remains a claim: `claim_authenticity` and, for squash claims, `squash_provenance` stay `unverified`. Treat a squash as authoritative only when an independently attributable scoped record binds the actual repository and exact source/base/destination endpoints; the helper cannot authenticate that record, and hashing an agent note cannot supply its provenance. Without it, report the observed comparison and unresolved provenance. `current_content_preservation` stays `unestablished` even with equal trees or positive ancestry; no semantic revert/release verdict is inferred. Check current reviewers, consumers, lifecycle and recovery separately. Held, managed, pinned, shared, dirty or unknown-lifecycle resources remain protected.
+
+Lineage is report-only: retention, ancestry and exact delta equality never establish release or current consumers. Comparisons stay `not_requested` when the optional claim is absent. Refs remain local, remote freshness stays unknown, and no fetch occurs. Requested partial/unavailable/changed/not-examined lineage makes outward coverage incomplete (exit 2, with invalid-input/cancellation precedence) while ordinary status, candidates, scope roots, byte completeness and frozen plans retain their original meaning. A comparison failure preserves independently valid retention/ancestry after successful final binding; failed final path/ref/executable/administration/graph-policy revalidation invalidates all derived comparison facts too. No lineage input or result enters a saved plan or changes removal eligibility. Without this option, the ordinary report and probes are unchanged.
+
 ## Task context and explanations
 
 A task cleanup request starts from the invoking conversation and current resources. The skill uses trusted runtime/native identity and available relevant earlier turns or linked records to explain creation, purpose, consumers, later holds and recovery. It reports missing context and contradictory evidence explicitly; completion, matching names and historical release alone do not establish current disposability. Applicable exclusions survive discovery. The [skill procedure](skills/task-disk-review/SKILL.md) owns this investigation; the Python helper has no conversation loader or general history search.

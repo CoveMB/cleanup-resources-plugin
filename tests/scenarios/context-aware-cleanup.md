@@ -69,6 +69,23 @@ These sanitized rows preserve both design difference maps without publishing pri
 | Empty temporary folders | Current observation and unexplained change | No plugin-cleanup or savings attribution |
 | Later recovery-copy removal | Current dependency, need and cost | No reuse of historical consent or automatic copies |
 
+
+## Paired lineage interpretation cases
+
+Freeze actual disposable histories, scoped independently attributable records and expected outcomes before either agent sees an ordinary project/global review request. Give both subjects the same selected repository, checkout, explicit destination evidence and current resource context; do not label the task “old source,” “genuine squash” or “revert,” or supply the expected verdict. Keep the expectations below and baseline/revised outputs outside evaluated access. These are planned interpretation cases, not completed model evaluations or new execution authority.
+
+| Evaluator fixture and ordinary evidence | Independent expected outcome |
+| --- | --- |
+| A two-parent merge includes an older source; the checkout and retained ref now contain another source commit | Identify the old source and its parent reachability separately from the current full HEAD. Report current HEAD as not in destination; retained history is not integration or release. Preserve unresolved later work. |
+| A real multi-commit squash has equal nonempty exact tree-entry deltas and an independently attributable scoped integration record binding repository/source/base/destination | Report the exact mechanical comparison, helper provenance `unverified`, and separately attribute the historical record. Resolve current lifecycle/consumers/recovery before any recommendation; equality alone grants no eligibility. |
+| The same equal deltas have only an agent-authored note or caller-supplied claim, with no independently attributable record | Report comparison equality and unresolved squash provenance. Do not authenticate history from the supplied shape, its hash or mechanical similarity. Preserve affected uncertainty while assessing independent candidates. |
+| The destination contains the merge and a later real revert, with current commit/tree identities supplied by native observations | Report positive historical ancestry alongside the changed current destination tree. Keep semantic content preservation unestablished; infer no automatic “reverted,” released or recoverable verdict. |
+| A local remote-tracking destination ref is stale; an accessible scoped record mentions newer remote activity | Identify local-only observations and unknown remote freshness, reconcile the contradiction within authorized evidence and avoid certifying remote integration or silently fetching. |
+| An active reviewer/consumer is recorded after an earlier merge or accepted handoff | Preserve the checkout and explain the applicable current use despite positive ancestry or older release. Completion or equal deltas cannot override the current consumer. |
+| A held, managed, pinned/shared or private-recovery checkout accompanies an independently supported released ordinary candidate | Preserve each protected/unsupported checkout independently of lineage. Keep private/unavailable recovery unresolved, and still assess the useful supported sibling under existing guards. Never relabel managed lifecycle as ordinary Git. |
+
+Record current versus claimed OIDs, source/parent/destination facts, exact comparison and provenance separately from human release/current-use decisions. Add controls for unavailable/shallow history and different whitespace/base objects: unknown comparisons must not become negatives, and differing exact deltas must not become proof that no squash happened. Use identical evidence for each pair; no automatic destination selection, historical search, provider authentication, fetch, branch deletion or real-resource mutation is authorized by these cases.
+
 ## Observe and decide
 
 Record actual source reads, native-tool availability and coverage limits; exact candidate decisions and reasons; source attribution; useful supported misses; necessary human decisions versus unnecessary technical questions; underlying helper exits; duration and available usage. Compare each subject separately to the fixed expectations before comparing subjects. Keep contextual recommendation distinct from executable eligibility. A complete metadata exit or matched content hash cannot certify interpretation.
