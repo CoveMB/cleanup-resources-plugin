@@ -863,12 +863,13 @@ class ExactFileNativeCleanup(ExactFileFixture):
         self.assertEqual(self.target.read_bytes(), PAYLOAD)
         for path in (self.target, self.project):
             for flag in (stat.UF_IMMUTABLE, stat.UF_APPEND):
-                path.chflags(flag)
+                original_flags = path.stat().st_flags
+                os.chflags(path, original_flags | flag)
                 try:
                     fresh = self.row(self.reviewed())
                     with self.assertRaises(ValueError): exact_file.snapshot(fresh, limits)
                     self.assertEqual(self.target.read_bytes(), PAYLOAD)
-                finally: path.chflags(0)
+                finally: os.chflags(path, original_flags)
         row = self.row(self.reviewed()); events = []; sync = cleanup._sync_file; unlink = os.unlink
         def flushing(fd): events.append('sync'); return sync(fd)
         def unlinking(*args, **kwargs): events.append('unlink'); return unlink(*args, **kwargs)
