@@ -5,6 +5,7 @@ import selectors
 import shutil
 import subprocess
 import time
+from typing import Callable
 
 from .review import path_inside
 
@@ -166,11 +167,7 @@ def inventory_git(selected, *, exclusions=(), max_worktrees=32, timeout=10.0, ca
     excluded_paths = [Path(os.path.abspath(value)) for value in exclusions]
 
     def check_exclusions(directory):
-        # Broad Git commands can enumerate descendants or read repository metadata.
-        # Refuse the entire affected checkout before any native probe.
-        if any(path_inside(directory, excluded) or path_inside(excluded, directory)
-               for excluded in excluded_paths):
-            raise InspectionUnavailable("Git scope overlaps an exclusion; inspection skipped and state unknown")
+        _check_exclusions(directory, excluded_paths)
 
 
     def metadata_target(path, prefix=b""):
@@ -283,3 +280,317 @@ def inventory_git(selected, *, exclusions=(), max_worktrees=32, timeout=10.0, ca
         result["complete"] = False
         result["limitations"].append(str(error) if isinstance(error, InspectionUnavailable) else "Selected Git scope unavailable")
     return result
+
+def _check_exclusions(directory: Path, excluded_paths: tuple[Path, ...]) -> None:
+    # Broad Git commands can enumerate descendants or read repository metadata.
+    if any(path_inside(directory, excluded) or path_inside(excluded, directory)
+           for excluded in excluded_paths):
+        raise InspectionUnavailable("Git scope overlaps an exclusion; inspection skipped and state unknown")
+
+
+def validate_lineage_request(document: dict) -> dict:
+    """Validate only the bounded literal input shape; acquire no paths or refs."""
+    fields = {"schema_version", "repository", "path", "expected_head", "retained_ref", "destination_ref"}
+    if (not isinstance(document, dict) or set(document) != fields
+            or type(document.get("schema_version")) is not int or document["schema_version"] != 1):
+        raise ValueError("unsupported Git lineage document")
+    for name in ("repository", "path"):
+        value = document[name]
+        if (not isinstance(value, str) or not value or len(value) > 4096 or "\0" in value
+                or not Path(value).is_absolute() or os.path.normpath(value) != value):
+            raise ValueError("Git lineage requires bounded normalized absolute paths")
+    oid = document["expected_head"]
+    if not isinstance(oid, str) or len(oid) not in (40, 64) or any(c not in "0123456789abcdef" for c in oid):
+        raise ValueError("Git lineage requires a full lowercase commit identity")
+    for name in ("retained_ref", "destination_ref"):
+        value = document[name]
+        if (not isinstance(value, str) or len(value) > 1024 or "\0" in value
+                or not value.startswith(("refs/heads/", "refs/remotes/"))
+                or any(c in value for c in ("~", "^", ":", "?", "*", "[", "\\", " ", "\n", "\r", "\t", "@{"))):
+            raise ValueError("Git lineage requires bounded literal full refs")
+    return dict(document)
+
+
+def _lineage_result(status="not_examined", reason="scope_or_budget_unavailable"):
+    from datetime import datetime, timezone
+    return {"status": status, "reason": reason,
+            "observed_at": datetime.now(timezone.utc).isoformat(), "binding": {},
+            "retention": {"head_in_ref": None}, "ancestry": {"head_in_destination": None},
+            "recovery": {"retained": None, "root_count": None, "coverage": "unknown",
+                         "reason": "recovery_not_observed", "content_availability": "not_certified"},
+            "integration": {"status": "not_requested"}, "patch_equivalence": {"status": "not_requested"},
+            "report_only": True, "refs_local_only": True, "remote_freshness": "unknown",
+            "release": "not_established", "current_use": "unknown",
+            "limitations": ["Before/after binding checks are not an atomic snapshot.",
+                            "Recovery reachability does not certify all content availability.",
+                            "Primary/private administration recovery is unsupported; consumers and release need scoped evidence."]}
+
+
+def observe_lineage(repository: Path, record: dict, request: dict, *, exclusions: tuple[str, ...] = (),
+                    deadline: float, cancelled: Callable[[], bool] | None = None) -> dict:
+    """One explicitly matched checkout, advisory only, under the outer deadline."""
+    from .git_worktree import _identity, _metadata_file, _administration_state, _head_history
+    from .plans import _open_parent
+    from .review import file_identity
+    import stat
+
+    request = validate_lineage_request(request)
+    result = _lineage_result()
+    repository, target = Path(repository), Path(request["path"])
+    excluded = tuple(Path(os.path.abspath(path)) for path in exclusions)
+    boundaries = [repository, target]
+    binding_started = False
+    invalid_ref = False
+
+    def guard(path):
+        if cancelled is not None and cancelled():
+            raise InspectionCancelled("Git lineage cancelled; remaining state unknown")
+        if time.monotonic() >= deadline:
+            raise InspectionUnavailable("Git lineage time limit; remaining state unknown")
+        _check_exclusions(Path(path), excluded)
+
+    def identity(path, *, directory=True):
+        guard(path)
+        return _identity(path, directory=directory)
+
+    def metadata(path):
+        guard(path)
+        return _metadata_file(Path(path))
+
+    def lstat(path):
+        guard(path)
+        parent = _open_parent(path)
+        try:
+            try:
+                return os.stat(Path(path).name, dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                return None
+        finally:
+            os.close(parent)
+
+    def link(path, prefix=b""):
+        payload, observed = metadata(path)
+        if not payload.startswith(prefix):
+            raise InspectionUnavailable("Git lineage metadata unsupported")
+        value = payload[len(prefix):].removesuffix(b"\n")
+        if not value or b"\n" in value or b"\0" in value:
+            raise InspectionUnavailable("Git lineage metadata unsupported")
+        destination = Path(os.path.abspath(Path(path).parent / os.fsdecode(value)))
+        # _identity rejects symlinks and _open_parent rejects linked ancestors.
+        # Also reject .. link traversal rather than normalizing it into authority.
+        raw = Path(path).parent / os.fsdecode(value)
+        guard(raw)
+        if raw.resolve(strict=True) != destination:
+            raise InspectionUnavailable("Git lineage metadata linked or changed")
+        identity(destination)
+        return destination, observed
+
+    def paths(directory):
+        directory_identity = identity(directory)
+        marker = directory / ".git"
+        entry = lstat(marker)
+        if entry is None:
+            raise InspectionUnavailable("Git lineage marker unavailable")
+        if stat.S_ISDIR(entry.st_mode):
+            admin = common = marker
+            marker_identity = identity(marker)
+            links = None
+        elif stat.S_ISREG(entry.st_mode):
+            admin, marker_identity = link(marker, b"gitdir: ")
+            common, common_marker = link(admin / "commondir")
+            reverse, reverse_identity = metadata(admin / "gitdir")
+            if reverse != os.fsencode(str(marker) + "\n"):
+                raise InspectionUnavailable("Git lineage reverse binding unavailable")
+            links = {"commondir": common_marker, "gitdir": reverse_identity}
+        else:
+            raise InspectionUnavailable("Git lineage marker unsupported")
+        return {"path": str(directory), "identity": directory_identity,
+                "marker_identity": marker_identity, "administration": str(admin),
+                "administration_identity": identity(admin), "common_directory": str(common),
+                "common_identity": identity(common), "links": links}
+
+    try:
+        # No executable/path acquisition until successful ordinary scope matching.
+        if (str(repository) != request["repository"] or record.get("path") != str(target)
+                or not record.get("status_complete") or record.get("bare") or record.get("prunable")):
+            return result
+        for path in boundaries:
+            guard(path)
+        initial_paths = [paths(directory) for directory in (repository, target)]
+        if initial_paths[0]["common_directory"] != initial_paths[1]["common_directory"]:
+            raise InspectionUnavailable("Git lineage common binding unavailable")
+        common = Path(initial_paths[0]["common_directory"])
+        admin = Path(initial_paths[1]["administration"])
+        boundaries.extend((common, admin))
+        executable = shutil.which("git")
+        if os.name != "posix" or not executable:
+            raise InspectionUnavailable("Git lineage executable unavailable")
+        guard(executable)
+        executable = str(Path(executable).resolve(strict=True))
+        executable_identity = identity(executable, directory=False)
+
+        def git(directory, *arguments):
+            for boundary in boundaries:
+                guard(boundary)
+            return _git(executable, directory, ["--no-replace-objects", *arguments], deadline, cancelled)
+
+        def text(directory, *arguments):
+            return os.fsdecode(git(directory, *arguments)).removesuffix("\n")
+
+        for directory in (repository, target):
+            if text(directory, "rev-parse", "--show-toplevel") != str(directory):
+                raise InspectionUnavailable("Git lineage top-level binding unavailable")
+            for flag, expected in (("--git-common-dir", common),
+                                   ("--git-dir", Path(initial_paths[(repository, target).index(directory)]["administration"]))):
+                if text(directory, "rev-parse", "--path-format=absolute", flag) != str(expected):
+                    raise InspectionUnavailable("Git lineage metadata binding unavailable")
+        records = _worktrees(git(repository, "worktree", "list", "--porcelain", "-z"))
+        registered = [row for row in records if row["path"] == str(target)]
+        if len(registered) != 1:
+            raise InspectionUnavailable("Git lineage registration unavailable")
+        object_format = text(repository, "rev-parse", "--show-object-format")
+        oid_length = {"sha1": 40, "sha256": 64}.get(object_format)
+        if oid_length is None or len(request["expected_head"]) != oid_length:
+            raise InspectionUnavailable("Git lineage object format unavailable")
+
+        def oid(value):
+            if len(value) != oid_length or any(c not in "0123456789abcdef" for c in value):
+                raise InspectionUnavailable("Git lineage object identity unavailable")
+            return value
+
+        def branch():
+            try:
+                return text(target, "symbolic-ref", "--quiet", "HEAD")
+            except GitRefused as error:
+                if error.returncode == 1:
+                    return None
+                raise
+
+        def resolve(ref):
+            value = oid(text(repository, "rev-parse", "--verify", ref))
+            if git(repository, "cat-file", "-t", value) != b"commit\n":
+                raise InspectionUnavailable("Git lineage endpoint is not a commit")
+            return value
+
+        for ref in (request["retained_ref"], request["destination_ref"]):
+            try:
+                git(repository, "check-ref-format", ref)
+            except GitRefused as error:
+                if error.returncode == 1:
+                    invalid_ref = True
+                    raise ValueError("invalid Git lineage full ref syntax") from None
+                raise
+        head = resolve("HEAD") if target == repository else oid(text(target, "rev-parse", "--verify", "HEAD"))
+        if git(target, "cat-file", "-t", head) != b"commit\n":
+            raise InspectionUnavailable("Git lineage HEAD is not a commit")
+        current_branch = branch()
+        result["binding"] = {"repository": str(repository), "repository_identity": initial_paths[0]["identity"],
+                             "repository_administration": initial_paths[0]["administration"],
+                             "repository_administration_identity": initial_paths[0]["administration_identity"],
+                             "repository_marker_identity": initial_paths[0]["marker_identity"],
+                             **initial_paths[1], "head": head, "branch": current_branch,
+                             "detached": current_branch is None, "retained_ref": request["retained_ref"],
+                             "destination_ref": request["destination_ref"], "object_format": object_format,
+                             "executable": executable, "executable_identity": executable_identity}
+        if head != request["expected_head"] or head != record.get("head") or current_branch != record.get("branch"):
+            result.update(status="changed", reason="binding_changed")
+            return result
+        retained, destination = resolve(request["retained_ref"]), resolve(request["destination_ref"])
+        result["binding"].update(retained_oid=retained, destination_oid=destination)
+
+        def graph_policy():
+            shallow = lstat(common / "shallow")
+            if shallow is not None and not stat.S_ISREG(shallow.st_mode):
+                raise InspectionUnavailable("Git lineage shallow policy unavailable")
+            # Grafts are refused by metadata existence only, never payload reads.
+            if lstat(common / "info/grafts") is not None:
+                raise InspectionUnavailable("Git lineage graft policy unsupported")
+            state = text(repository, "rev-parse", "--is-shallow-repository")
+            if state not in ("true", "false"):
+                raise InspectionUnavailable("Git lineage graph policy unavailable")
+            return (file_identity(shallow) if shallow else None, state)
+
+        policy = graph_policy()
+        binding_started = True
+        complete = policy[1] == "false" and policy[0] is None
+
+        def ancestor(first, second):
+            if not complete:
+                return None
+            try:
+                git(repository, "merge-base", "--is-ancestor", first, second)
+                return True
+            except GitRefused as error:
+                return False if error.returncode == 1 else None
+
+        result["retention"]["head_in_ref"] = ancestor(head, retained)
+        result["ancestry"]["head_in_destination"] = ancestor(head, destination)
+        administration_state = None
+        try:
+            if admin.parent != common / "worktrees":
+                raise ValueError("primary recovery unsupported")
+            guard(admin)
+            administration_state = _administration_state(admin)
+            roots = [head]
+            if "logs/HEAD" in administration_state:
+                guard(admin / "logs/HEAD")
+                roots.extend(_head_history(admin, administration_state["logs/HEAD"], oid_length))
+            if "ORIG_HEAD" in administration_state:
+                payload, observed = metadata(admin / "ORIG_HEAD")
+                original = os.fsdecode(payload.removesuffix(b"\n"))
+                oid(original)
+                if original == "0" * oid_length or observed != administration_state["ORIG_HEAD"]:
+                    raise ValueError("unsupported recovery root")
+                roots.append(original)
+            roots = list(dict.fromkeys(roots))
+            result["recovery"]["root_count"] = len(roots)
+            valid = True
+            for root in roots:
+                # Check every distinct nonzero root directly; never peel a tag.
+                try:
+                    if git(repository, "cat-file", "-t", root) != b"commit\n":
+                        valid = False
+                except GitRefused:
+                    valid = False
+            if valid and complete:
+                unretained = git(repository, "rev-list", "--max-count=1", *roots, "--not", retained)
+                if unretained:
+                    oid(os.fsdecode(unretained).removesuffix("\n"))
+                result["recovery"].update(retained=not bool(unretained), coverage="supported_linked_roots",
+                                          reason="supported_roots_observed")
+        except InspectionCancelled:
+            raise
+        except (ValueError, OSError, InspectionUnavailable):
+            pass
+
+        # All derived observations depend on the final binding and graph policy.
+        final_paths = [paths(directory) for directory in (repository, target)]
+        current_executable = shutil.which("git")
+        if current_executable:
+            guard(current_executable)
+            current_executable = str(Path(current_executable).resolve(strict=True))
+        if (final_paths != initial_paths or identity(executable, directory=False) != executable_identity
+                or current_executable != executable
+                or text(target, "rev-parse", "--verify", "HEAD") != head or branch() != current_branch
+                or resolve(request["retained_ref"]) != retained or resolve(request["destination_ref"]) != destination
+                or graph_policy() != policy):
+            raise InspectionUnavailable("Git lineage binding changed")
+        if administration_state is not None:
+            guard(admin)
+            if _administration_state(admin) != administration_state:
+                raise InspectionUnavailable("Git lineage administration changed")
+        result.update(status="observed" if all(value is not None for value in
+                      (result["retention"]["head_in_ref"], result["ancestry"]["head_in_destination"],
+                       result["recovery"]["retained"])) else "partial", reason="local_observation")
+        return result
+    except InspectionCancelled:
+        raise
+    except (InspectionUnavailable, OSError, RuntimeError, ValueError):
+        if invalid_ref:
+            raise
+        result["retention"]["head_in_ref"] = None
+        result["ancestry"]["head_in_destination"] = None
+        result["recovery"]["retained"] = None
+        result.update(status="changed" if binding_started else "unavailable",
+                      reason="binding_or_policy_unavailable" if binding_started else "inspection_unavailable")
+        return result

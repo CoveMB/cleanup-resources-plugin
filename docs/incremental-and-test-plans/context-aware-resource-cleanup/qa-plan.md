@@ -4,6 +4,18 @@ Status: implementation resumed on 9 November 2026; see [continuation status](pla
 
 Baseline evidence for `9aa8fb4` records 213 local tests: 141 passed, 71 skipped and one Unix-socket creation error independently reproduced as an environment restriction. The [hosted Ubuntu/macOS matrix](https://github.com/CoveMB/cleanup-resources-plugin/actions/runs/41960085046) at that same source passed with 213 tests per job: Ubuntu Python 3.12/3.14 skipped 71 each; macOS Python 3.12/3.14 skipped 27/26 respectively. These results are inherited evidence, not a new run by this status update; skipped/native cases and installed/practical acceptance remain incomplete. Private historical model observations stay attributed to their tested subjects and do not certify this combined candidate.
 
+## I02 evidence reconciliation — 9 November 2026
+
+Three independent source reviews—requirement fidelity, architecture/simplicity and verification/safety—passed, followed by passing reviews of the affected guidance repair. The current repair subject is `07e4407`, tree-identical to `7023da9`; its Python files remain unchanged from `9bdec7e`/`76251ea`.
+
+The [prior-source hosted matrix](https://github.com/CoveMB/cleanup-resources-plugin/actions/runs/42644122546) passed for source `76251ea`. Its actual synthetic checkout `2118fcb` was file-identical to that source. Each job reported 213 tests, with 71/71 skips on Ubuntu Python 3.12/3.14 and 27/26 on macOS Python 3.12/3.14. This run predates the `07e4407` guidance repair; it is inherited evidence, not a new CI run on that repair.
+
+Two initial synthetic pairs identified a supported candidate and preserved controls, but subsequent changes to bound notes invalidated their saved reference bindings. The repair makes note content and permissions final before helper review. Two fresh, finite followups on the repaired guidance preserved all 14 final reference identities/hashes and all 109 recorded fixture entries. An independent evaluator found no new material contrary finding; the 47 earlier evaluation outputs remained unchanged.
+
+These are bounded observations from the recorded subjects, not a measured relative improvement or universal safety result. Access capture does not establish exhaustive read coverage. Complete Q09 coverage, native history retrieval, installed/client behavior, Q10 existing-resource trials and human practical acceptance remain pending. Retain the initial binding failure as evidence; the followups do not rewrite it as a success.
+
+The [I03 implementation plan](i03-worktree-lineage.md) has passed its plan-review gates. Its runtime behavior, deterministic fixtures and Q03 interpretation/acceptance evidence remain to be implemented and observed.
+
 ## Behavioral acceptance matrix
 
 | ID | Required observation | Material negative cases |
@@ -43,7 +55,7 @@ Freeze independent expected protected/eligible outcomes before evaluation. Recor
 
 Measure supported useful candidacy, protected/unknown preservation, source coverage, missed candidates, unnecessary questions and cost separately. Do not optimize reclaimable bytes or fewer questions at the expense of correctness. Static desk-checks and fixture tests supplement, but cannot replace, changed investigator behavior evidence.
 
-Historical work did not establish a complete matched baseline/revised general-history comparison. Treat that as an outstanding obligation; do not infer missing baseline results from revised-only runs. Refresh only changed inputs or unresolved coverage and reuse still-applicable evidence.
+The bounded I02 pairs and followups above add subject-specific observations but do not establish the complete matched baseline/revised general-history comparison. Keep remaining Q09 coverage open; do not infer missing baseline results from revised-only runs or claim measured improvement. Refresh only changed inputs or unresolved coverage and reuse still-applicable evidence.
 
 ## Two practical read-only trials
 

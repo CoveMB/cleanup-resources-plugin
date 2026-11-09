@@ -148,6 +148,18 @@ def record_evidence_guidance(report, snapshots, warning, explanation):
                                   "optional_instruction": OPTIONAL_CAPTURE_INSTRUCTION}
 
 
+def _lineage_text(observation: dict) -> list[str]:
+    quote = lambda value: json.dumps(value, ensure_ascii=True)
+    return ["Git lineage (report-only): " + observation["status"] + " | " + observation["reason"],
+            "Git lineage binding: " + quote(observation["binding"]),
+            "Git lineage retention: " + quote(observation["retention"]),
+            "Git lineage ancestry: " + quote(observation["ancestry"]),
+            "Git lineage recovery: " + quote(observation["recovery"]),
+            "Git lineage comparisons: " + quote({key: observation[key] for key in ("integration", "patch_equivalence")}),
+            "Git lineage limits: " + quote({key: observation[key] for key in
+                ("observed_at", "report_only", "refs_local_only", "remote_freshness", "release", "current_use", "limitations")})]
+
+
 def render_text(report):
     quote = lambda value: json.dumps(value, ensure_ascii=True)
     coverage = report["coverage"]
@@ -197,6 +209,8 @@ def render_text(report):
         for row in report["git"]["worktrees"]:
             lines.append("Report-only worktree: " + quote(row))
         lines.extend("Git limit: " + item for item in report["git"]["limitations"])
+    if "git_lineage" in report:
+        lines.extend(_lineage_text(report["git_lineage"]))
     for location in report.get("locations", []):
         lines.append("Coverage: " + quote(location))
     for inventory in report.get("git_inventories", []):

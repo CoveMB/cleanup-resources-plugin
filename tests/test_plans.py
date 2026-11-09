@@ -650,5 +650,115 @@ class AssessedPlans(unittest.TestCase):
             self.owner().read_document(duplicate)
 
 
+
+    def test_git_lineage_final_phase_preserves_review(self):
+        import test_git_inventory
+        import devspace.git_inventory as inventory
+        fixture = test_git_inventory.GitInventory()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        linked, request, record = fixture.lineage_fixture(linked_name="linked")
+        config = {"schema_version": 1, "roots": [str(self.project), str(fixture.project)]}
+        from devspace import docker_cleanup, npm_cache
+        import base64
+        for version in (1, 2, 3, 4):
+            assessment = copy.deepcopy(self.assessment)
+            assessment["schema_version"] = version
+            for row in assessment["candidates"]:
+                row["path"] = str(self.project / row["path"])
+                if version >= 2: row["operation"] = "directory-remove"
+            if version >= 3:
+                assessment["candidates"].append({"operation": "docker-container-remove",
+                    "docker": {"endpoint": "unix://"+str(self.base / "fixture.sock"), "id": "a"*64}})
+            if version >= 4:
+                (self.base / "selected-cache").mkdir(exist_ok=True)
+                assessment["candidates"].append({"operation": "npm-cache-remove", "npm": {
+                    "cache": str(self.base / "selected-cache"), "key": "selected",
+                    "integrity": "sha512-"+base64.b64encode(bytes(64)).decode()}})
+            cache = str(self.base / "optional-cache")
+            before = (test_git_inventory.lineage_snapshot(fixture.fixture), test_git_inventory.lineage_snapshot(self.base))
+            events = []
+            clock = [100.0]
+            advancing_clock = [False]
+            original_docker, original_npm = docker_cleanup.review, npm_cache.review
+            def docker(*args, **kwargs):
+                events.append("docker")
+                with patch("devspace.docker_cleanup.inspect", side_effect=inventory.InspectionUnavailable("fixture provider unavailable")):
+                    return original_docker(*args, **kwargs)
+            def npm(*args, **kwargs):
+                events.append("npm")
+                with patch("devspace.npm_cache.inspect", side_effect=inventory.InspectionUnavailable("fixture provider unavailable")):
+                    return original_npm(*args, **kwargs)
+            def discover(*args, **kwargs):
+                events.append("cache")
+                if advancing_clock[0]: clock[0] = 108.0
+                return {"cache": cache, "coverage": "examined", "entries": []}
+            with patch("devspace.npm_cache.inventory", side_effect=discover), \
+                    patch("devspace.docker_cleanup.review", side_effect=docker), \
+                    patch("devspace.npm_cache.review", side_effect=npm):
+                control = self.owner().review_scope(config, mode="global", assessment=assessment, npm_caches=[cache])
+            self.assertTrue(any(row["assessment"] == "Eligible" for row in control["candidates"]))
+            def exhausted(*args, **kwargs):
+                expected = (["docker"] if version >= 3 else []) + (["npm"] if version >= 4 else []) + ["cache"]
+                self.assertEqual(events[-len(expected):], expected)
+                self.assertEqual(kwargs["deadline"], 110.0, "lineage receives the original outer deadline")
+                self.assertEqual(freeze.call_args.args[0]["plan"], control["plan"], "final frozen plan exists before lineage")
+                freezes_at_lineage.append(freeze.call_count)
+                raise inventory.InspectionUnavailable("Git inspection time limit; remaining state unknown")
+            with patch("devspace.npm_cache.inventory", side_effect=discover), \
+                    patch("devspace.docker_cleanup.review", side_effect=docker), \
+                    patch("devspace.npm_cache.review", side_effect=npm):
+                observed = self.owner().review_scope(config, mode="global", assessment=assessment,
+                                                    npm_caches=[cache], git_lineage=request)
+            self.assertEqual(observed["git_lineage"]["status"], "observed")
+            for key in ("candidates", "scope_roots", "plan", "size"):
+                self.assertEqual(observed[key], control[key], key)
+            advancing_clock[0] = True
+            freezes_at_lineage = []
+            with self.subTest(version=version), patch("devspace.plans.time.monotonic", side_effect=lambda: clock[0]), \
+                    patch("devspace.npm_cache.inventory", side_effect=discover), \
+                    patch("devspace.docker_cleanup.review", side_effect=docker), \
+                    patch("devspace.npm_cache.review", side_effect=npm), \
+                    patch("devspace.plans.freeze_review", wraps=self.owner().freeze_review) as freeze, \
+                    patch("devspace.git_inventory.observe_lineage", side_effect=exhausted) as observe:
+                report = self.owner().review_scope(config, mode="global", assessment=assessment,
+                                                  npm_caches=[cache], git_lineage=request)
+            observe.assert_called_once()
+            self.assertEqual(freezes_at_lineage, [freeze.call_count], "no freeze occurs after lineage")
+            for key in ("candidates", "scope_roots", "plan", "size"):
+                self.assertEqual(report[key], control[key], key)
+            self.assertFalse(report["coverage"]["complete"])
+            self.assertNotEqual(report["git_lineage"]["status"], "observed")
+            self.assertEqual((test_git_inventory.lineage_snapshot(fixture.fixture), test_git_inventory.lineage_snapshot(self.base)), before)
+        # Time consumed by ordinary work cannot create a fresh advisory budget.
+        with patch("devspace.plans._review_docker_scope", return_value=copy.deepcopy(control)), \
+                patch("devspace.plans.time.monotonic", side_effect=[10, 30]), \
+                patch("devspace.git_inventory.observe_lineage", side_effect=AssertionError("expired acquisition")):
+            report = self.owner().review_scope(config, mode="global", timeout=1, git_lineage=request)
+        self.assertEqual(report["git_lineage"]["status"], "not_examined")
+
+    def test_git_lineage_global_later_root_survives_exhaustion(self):
+        import test_git_inventory
+        import devspace.git_inventory as inventory
+        fixture = test_git_inventory.GitInventory()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        linked, request, record = fixture.lineage_fixture(linked_name="linked")
+        config = {"schema_version": 1, "roots": [str(fixture.project), str(self.project)]}
+        assessment = copy.deepcopy(self.assessment)
+        for row in assessment["candidates"]: row["path"] = str(self.project / row["path"])
+        before = (test_git_inventory.lineage_snapshot(fixture.fixture), test_git_inventory.lineage_snapshot(self.base))
+        control = self.owner().review_scope(config, mode="global", assessment=assessment)
+        self.assertTrue(any(row["assessment"] == "Eligible" for row in control["candidates"]))
+        for failure in (inventory.InspectionUnavailable("time limit"), inventory.InspectionCancelled("cancelled"), KeyboardInterrupt()):
+            with patch("devspace.git_inventory.observe_lineage", side_effect=failure):
+                report = self.owner().review_scope(config, mode="global", assessment=assessment, git_lineage=request)
+            self.assertEqual(report["cancelled"], isinstance(failure, (inventory.InspectionCancelled, KeyboardInterrupt)))
+            self.assertFalse(report["coverage"]["complete"])
+            for key in ("candidates", "scope_roots", "plan", "size"):
+                self.assertEqual(report[key], control[key], key)
+        self.assertEqual((test_git_inventory.lineage_snapshot(fixture.fixture), test_git_inventory.lineage_snapshot(self.base)), before)
+
+
 if __name__ == "__main__":
     unittest.main()

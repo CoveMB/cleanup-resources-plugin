@@ -62,6 +62,32 @@ Without assessment/context inputs, the terminal helper still reports observation
 
 Task mode stays within its selected directory. Project mode supports non-Git projects and inventories Git-discovered linked worktrees when the selected project is itself a worktree root. Nested selections do not expand into their parent repository. Discovery alone leaves worktrees report-only. Explicitly assessed ordinary linked Git checkouts support native removal below; branches are always retained. Status includes staged, dirty, untracked, ignored, locked, detached and locally unpushed states; missing upstream/activity stays unknown. No fetch occurs. Git status inspection refuses configured clean/process filters because even status can execute them, including unused global LFS filters. Submodule contents and collapsed ignored-directory contents are not inspected by Git inventory.
 
+### Explicit local Git lineage advisory
+
+For one already selected or discovered checkout, an agent can prepare a bounded binding document and add `--git-lineage FILE` to a project or configured global review:
+
+```sh
+python3 skills/task-disk-review/scripts/devspace.py review --project "/selected/repository" \
+  --git-lineage "/selected/private-notes/lineage.json" --json
+```
+
+```json
+{
+  "schema_version": 1,
+  "repository": "/selected/repository",
+  "path": "/selected/linked-checkout",
+  "expected_head": "0123456789abcdef0123456789abcdef01234567",
+  "retained_ref": "refs/heads/retained-topic",
+  "destination_ref": "refs/heads/explicit-integration-destination"
+}
+```
+
+The example OID is illustrative; the agent obtains the actual full current commit identity and explicit destination from scoped evidence. Paths must be absolute and lexically normalized; refs must be full literal `refs/heads/…` or `refs/remotes/…` names. SHA-1 and locally supported SHA-256 repositories retain their full OIDs. Task mode rejects this option. Unmatched or excluded targets are not acquired, and no destination is inferred from an upstream or branch name.
+
+This optional phase runs after ordinary discovery, all candidate/provider assessment, optional cache discovery and the last frozen-plan update, using only the remaining outer review budget. JSON `git_lineage` and text report the bound current HEAD/ref identities, independent retention and destination ancestry, and supported linked-worktree HEAD/reflog/ORIG_HEAD recovery reachability. Every distinct nonzero recovery root must directly name a commit. Primary recovery, private/unsupported administration, shallow or missing history, unavailable tools and incomplete final revalidation remain unknown. No author/message payloads are reported. Replacement objects are disabled; graft metadata is refused without reading its contents. Final binding and graph-policy checks detect persistent drift but do not make the observations atomic or certify every blob's availability.
+
+Lineage is report-only: retention and ancestry never establish release, current consumers or semantic preservation. `integration` and `patch_equivalence` remain `not_requested`; historical merge/squash comparisons are not implemented by this surface. Refs remain local, remote freshness stays unknown, and no fetch occurs. Requested partial/unavailable/changed/not-examined lineage makes outward coverage incomplete (exit 2, with invalid-input/cancellation precedence) while ordinary status, candidates, scope roots, byte completeness and frozen plans retain their original meaning. No lineage input or result enters a saved plan or changes removal eligibility. Without this option, the ordinary report and probes are unchanged.
+
 ## Task context and explanations
 
 A task cleanup request starts from the invoking conversation and current resources. The skill uses trusted runtime/native identity and available relevant earlier turns or linked records to explain creation, purpose, consumers, later holds and recovery. It reports missing context and contradictory evidence explicitly; completion, matching names and historical release alone do not establish current disposability. Applicable exclusions survive discovery. The [skill procedure](skills/task-disk-review/SKILL.md) owns this investigation; the Python helper has no conversation loader or general history search.
