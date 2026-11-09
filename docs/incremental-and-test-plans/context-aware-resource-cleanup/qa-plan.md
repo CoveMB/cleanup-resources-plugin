@@ -48,6 +48,53 @@ The candidate supplied richer structured lineage distinctions, but no recommenda
 
 The controller retained both original observations for this finite synthetic case only. No resource cleanup occurred. Known-value disclosure checks and inspected commands found no observed acceptance-blocking breach, but do not prove absence of every forbidden read or general injection resistance. Fictional scoped provenance is not authenticated real-world ownership/release. Broader Q03/Q09 coverage, native history, installed/client behavior, Q10 existing-resource trials and human practical acceptance remain incomplete. Human review is still required for unresolved current ownership, consumers, release and recovery. Hallucination risk is extrapolation beyond these recorded subjects and finite observations.
 
+## Legacy-container refusal evidence reconciliation — 9 November 2026
+
+### Frozen source and review gates
+
+The correction is published as `3a181c61d6be300d31de5eb479c1aeb0f1e747e2`, tree `f57f55d2a2654ba05fc1101e20cf937792b5d15a`, in draft [PR 17](https://github.com/CoveMB/cleanup-resources-plugin/pull/17), based on `worktree-lineage`. The pre-code published subject is `df724dd1b94de4f1caf87c6a78cd3f0e33978cdc`, tree `a4e4724c5c105f60936dda62ed279da6b0c7412c`; its 15 runtime package members equal the accepted combined I03 predecessor. The correction package SHA-256 is `4cd67fd8bfed5c4b6421debd04026e174f0ace69d7bbe5a21841f8b5c182e945`; the pre-code package SHA-256 is `8078eb5ce98debca695a0b3223bace7cdf26137346b1458d379959f189bc0b14`. These identify the actual evaluated package bytes; later status reconciliation does not rebind the observations.
+
+Requirements fidelity, architecture/simplicity and verification/safety each received a distinct sequential independent source review on the same frozen complete candidate. All three reports were collected before any repair; every scope approved, with no material source finding and no source repair required. Plan approval, source approval and runtime/host acceptance are separate claims. The implementation provides one provider-free refusal before container provider acquisition and selected-only whole-batch admission before ordinary/completed-provider acquisition, while retaining historical readers and observation-only reconciliation. All legacy container removal is currently Unavailable; no positive I06 route follows.
+
+### Actual local evidence and retained red qualification
+
+The single local full suite reported **261 tests: 186 passed, 74 skipped and one error; exit 1**. The error is the known AF_UNIX socket-construction `PermissionError` in the existing alias test before its assertions. This is not a green local full-suite result. Final focused results were:
+
+| Scope | Total | Passed | Skipped | Errors | Exit |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Docker contracts | 35 | 29 | 5 | 1 | 1 |
+| Plans | 36 | 33 | 3 | 0 | 0 |
+| Cleanup | 32 | 7 | 25 | 0 | 0 |
+| Actual extracted package | 3 | 3 | 0 | 0 | 0 |
+| Opt-in native Docker | 7 | 0 | 7 | 0 | 0 |
+
+These overlapping runs are not additive coverage. New portable refusal, early admission, useful supported controls, observation and actual extracted-package cases passed. Native Docker tests were adapted but all seven were skipped; no revised native Docker effect was executed. Portable doubles do not establish real macOS/APFS transaction behavior.
+
+Initial failed/partial logs remain retained. In particular, the two confirmed container/legacy red logs contain respectively 20 and seven missing-policy errors **plus 84 invalid spy-target harness errors in each**. Those mixed-batch subtrials did not reach the intended policy boundary and are not policy-reachability red evidence. Final corrected wrapping-spy/zero-acquisition tests and passing portable logs establish current reachability. The separate extracted-package baseline red failed specifically on generic versus exact refusal reason. This qualifies the original implementation report's incomplete grouped red description without rewriting its report or logs; no replay or source repair was required.
+
+### Exactly two original finite model observations
+
+One fresh baseline observation and one fresh correction observation completed, with one actual extracted-helper review call each and no retry or replacement. Both helper calls exited 2 with incomplete outward metadata coverage and empty stderr, while each identified the independently supported generated directory as Eligible with complete target comparison. Both preserved all fictional containers and protected/unknown controls. The correction explained universal current container unavailability and attributed that reason explicitly to its assigned package documentation/source. **Neither observation executed a Docker row, native provider call or live container-policy refusal.** The baseline also preserved containers and found the same useful directory; no causal recommendation-quality or preservation advantage was established.
+
+Independent evaluation and final disposition accepted both original finite observations. All **81 raw survivor records, 30 runtime-member identities, 17 frozen input identities and 18 original output identities** remained bound; every emitted bound reference's recorded identity/hash remained intact. The 342 passing integrity/binding checks are not 342 functional tests. The preserved setup qualification failure and correction were preparation evidence, not model retries. Earlier prelaunch fields remain historical preparation state.
+
+No cleanup or measured space gain occurred. Unchanged survivors, recorded reads and a finite known-value output scan do not prove exhaustive forbidden-read absence, general privacy or injection resistance. Full access, backend, token and cost telemetry were unavailable. Fictional records do not authenticate real ownership, current consumers or release; human practical acceptance remains necessary. Hallucination risk is extrapolating these finite observations or source attribution into native/version, installed-client or general safety claims.
+
+### Correction-specific hosted status and remaining gates
+
+[Hosted run 42678426782](https://github.com/CoveMB/cleanup-resources-plugin/actions/runs/42678426782) passed all four jobs. Actual checkout `b6f5f23e83d817310e65f2763baa2712c104b8bb` has identical tracked contents to published `3a181c61d6be300d31de5eb479c1aeb0f1e747e2` (the GitHub comparison returns no changed files). Each job ran 261 tests:
+
+| Host | Python | Passed | Skipped | Errors / failures |
+| --- | --- | ---: | ---: | --- |
+| Ubuntu | 3.12 | 187 | 74 | 0 / 0 |
+| Ubuntu | 3.14 | 187 | 74 | 0 / 0 |
+| macOS | 3.12 | 234 | 27 | 0 / 0 |
+| macOS | 3.14 | 235 | 26 | 0 / 0 |
+
+Both Mac jobs actually ran and passed `test_legacy_container_plan_refuses_mixed_batch_before_confirmation` and `test_legacy_container_pending_reconcile_remains_observation_only`, retaining real capability, private State, APFS snapshot and durability behavior. The portable admission/useful-control cases and actual extracted-package contract passed. The socket test passed in all four jobs. All seven opt-in native Docker tests remained skipped in every job; these hosted component results do not qualify their revised native effects. No hosted repair or rerun was needed.
+
+The controller accepted the source, finite model observations and current hosted component gates for I04/I05 dependency continuation. Revised opt-in native Docker effects, native-history/installed-client behavior, broader Q03/Q09, Q10's two existing-resource read-only trials and human practical acceptance remain incomplete. I06 still lacks qualified complete writable-content support; I07 still lacks selected-store confinement/version proof; I08 combined acceptance remains open. Current ownership, use, release and loss decisions need human review in any separately authorized practical cleanup; technical qualification cannot be replaced by user attestation.
+
 ## Behavioral acceptance matrix
 
 | ID | Required observation | Material negative cases |

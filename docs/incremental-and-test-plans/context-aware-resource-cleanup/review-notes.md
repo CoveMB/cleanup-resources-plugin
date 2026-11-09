@@ -24,6 +24,14 @@ Task 1's four-job hosted matrix passed at its file-identical published subject. 
 
 An independent finite paired evaluation of baseline `07e4407` and candidate `1753e55` retained both original observations: both found the same two useful candidates and preserved the other resources. Richer candidate advisory structure did not establish a recommendation-quality advantage. Later test-only changes do not rebind those model launches. Broader Q03/Q09, installed/native, Q10 and human acceptance remain open.
 
+## Legacy-container correction source and model gates
+
+All three distinct sequential independent source scopes approved frozen tree `f57f55d2a2654ba05fc1101e20cf937792b5d15a` without source repairs; all reports were collected before any repair. Published source is `3a181c61d6be300d31de5eb479c1aeb0f1e747e2` in draft [PR 17](https://github.com/CoveMB/cleanup-resources-plugin/pull/17). The [QA reconciliation](qa-plan.md#legacy-container-refusal-evidence-reconciliation--9-november-2026) owns the local 261-test result (186 passed, 74 skipped, one known AF_UNIX construction error), focused results and passing correction-specific hosted matrix.
+
+The confirmed red logs retain invalid spy-target failures in all 84 mixed-batch subtrials in each log; those were harness failures, not policy-reachability evidence. Final corrected guard tests and the separate clean packaged-contract red supply the qualified current evidence. The original logs/report remain preserved.
+
+Exactly two original finite model observations were accepted, one helper call each with no replacement. Both found the useful supported directory and preserved containers; the correction's universal refusal reason was documentation/source attribution, with zero model Docker rows/native calls. No quality advantage was established. Integrity/reference identities remained intact, but these finite checks do not prove exhaustive access safety or native/installed/practical acceptance. Broader I06–I08 and human acceptance remain open; I04/I05 are the next implementation increments.
+
 ## Comparison gap
 
 Historical investigator evaluation, bounded I02 observations and the finite I03 pair do not establish the complete paired baseline/revised comparison required by the design. Revised-only observations cannot prove measured improvement or supply missing baseline outcomes.
