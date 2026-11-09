@@ -137,6 +137,125 @@ class AssessedPlans(unittest.TestCase):
             self.assertEqual(rows[name]["effect"], "permanent removal of this exact directory; rebuild required")
         self.assertEqual(before, self.bytes())
 
+    def test_unresolved_obligations_report_distinct_reasons(self):
+        from devspace.report import render_text
+        cases = (
+            ("missing-inventory", "independent content baseline missing or unsupported"),
+            ("unknown-consumer", "consumer state unresolved"),
+            ("changed-reference", "reference digest changed"),
+            ("missing-recovery", "recovery evidence missing"),
+            ("malformed-inventory", "independent content baseline invalid or incomplete"),
+            ("missing-reference", "referenced evidence unavailable or unsafe"),
+        )
+        for variant, expected_reason in cases:
+            with self.subTest(variant=variant):
+                assessment = copy.deepcopy(self.assessment)
+                candidate = assessment["candidates"][0]
+                if variant == "missing-inventory":
+                    candidate["content"].pop("reference")
+                elif variant == "unknown-consumer":
+                    candidate["consumers"][0]["state"] = "unknown"
+                elif variant == "changed-reference":
+                    record = self.records / "changed-reference.txt"
+                    record.write_bytes(b"original scoped decision")
+                    assessment["references"]["decision"] = {
+                        "path": str(record), "sha256": hashlib.sha256(record.read_bytes()).hexdigest()}
+                    record.write_bytes(b"UNTRUSTED_REFERENCE_PAYLOAD changed decision")
+                elif variant == "missing-recovery":
+                    candidate.pop("recovery")
+                elif variant == "malformed-inventory":
+                    candidate["content"]["reference"] = "source"
+                else:
+                    assessment["references"]["source"]["path"] = str(self.records / "PRIVATE_MISSING_REFERENCE")
+                before = self.bytes()
+                report = self.review(assessment)
+                row = self.by_path(report)["A"]
+                self.assertEqual(row["assessment"], "Review")
+                self.assertEqual(row["reason"], expected_reason)
+                rendered = render_text(report)
+                self.assertIn(expected_reason, rendered)
+                for marker in ("UNTRUSTED_REFERENCE_PAYLOAD", "PRIVATE_MISSING_REFERENCE"):
+                    self.assertNotIn(marker, rendered)
+                    self.assertNotIn(marker, row["reason"])
+                self.assertEqual(self.bytes(), before)
+                self.assertEqual((self.project / "A/data.txt").read_bytes(), b"ordinary fixture library\n")
+                self.assertEqual((self.project / "B-original-failure/retained.txt").read_bytes(),
+                                 b"synthetic original install failure\n")
+
+    def test_contextual_obligations_identify_the_missing_basis(self):
+        cases = (
+            ("content", "content provenance evidence missing"),
+            ("recovery", "recovery evidence missing"),
+            ("consumer_scope", "consumer scope evidence missing"),
+            ("release", "release evidence missing"),
+        )
+        before = self.bytes()
+        for claim, expected_reason in cases:
+            with self.subTest(claim=claim):
+                assessment = copy.deepcopy(self.assessment)
+                assessment["candidates"][0][claim]["basis"] = []
+                row = self.by_path(self.review(assessment))["A"]
+                self.assertEqual(row["assessment"], "Review")
+                self.assertEqual(row["reason"], expected_reason)
+        self.assertEqual(self.bytes(), before)
+
+    def test_unexpected_reference_errors_do_not_leak(self):
+        from devspace.report import render_text
+        before = self.bytes()
+        for error_type in (OSError, ValueError, KeyError, TypeError, UnicodeError, RecursionError):
+            with self.subTest(error=error_type.__name__):
+                with patch("devspace.plans._read_file", side_effect=error_type("RAW_PRIVATE_ERROR /private/source")):
+                    report = self.review()
+                row = self.by_path(report)["A"]
+                self.assertEqual(row["assessment"], "Review")
+                self.assertEqual(row["reason"], "referenced evidence unavailable or unsafe")
+                self.assertNotIn("RAW_PRIVATE_ERROR", json.dumps(report))
+                self.assertNotIn("/private/source", render_text(report))
+        self.assertEqual(self.bytes(), before)
+
+    def test_protection_precedes_unresolved_diagnostics(self):
+        (self.project / "A/.env").write_bytes(b"SYNTHETIC_PROTECTED_SECRET")
+        self.specifications[0]["content"] = {}
+        self.specifications[1]["consumers"][0]["state"] = "active"
+        self.specifications[1].pop("recovery")
+        before = self.bytes()
+        report = self.review()
+        rows = self.by_path(report)
+        self.assertEqual(rows["A"]["assessment"], "Keep")
+        self.assertEqual(rows["packet/C"]["assessment"], "Keep")
+        self.assertEqual(rows["B-original-failure"]["assessment"], "Keep")
+        limited = self.review({**self.assessment, "candidates": [self.specifications[2]]}, max_content_bytes=1)
+        self.assertEqual(self.by_path(limited)["legacy"]["assessment"], "Unavailable")
+        self.assertNotIn("SYNTHETIC_PROTECTED_SECRET", json.dumps(report))
+        self.assertEqual(self.bytes(), before)
+
+    def test_diagnostic_changes_preserve_versioned_selection(self):
+        before = self.bytes()
+        owner = self.owner()
+        for version in (1, 2, 3, 4):
+            with self.subTest(version=version):
+                assessment = copy.deepcopy(self.assessment)
+                assessment["schema_version"] = version
+                if version > 1:
+                    for candidate in assessment["candidates"]:
+                        candidate["operation"] = "directory-remove"
+                report = self.review(assessment)
+                eligible = self.by_path(report)["A"]
+                self.assertEqual(eligible["assessment"], "Eligible")
+                self.assertEqual(eligible["reason"],
+                                 "complete comparison and evidence-backed content/use/release/recovery assessment")
+                self.assertEqual(report["plan"]["schema_version"], version)
+                plan = json.loads(json.dumps(report["plan"]))
+                self.assertEqual(owner.validate_selection(plan, [eligible["id"]]), [eligible])
+                assessment["candidates"][0]["consumers"][0]["state"] = "unknown"
+                unresolved = self.review(assessment)
+                row = self.by_path(unresolved)["A"]
+                self.assertEqual(row["assessment"], "Review")
+                self.assertEqual(row["reason"], "consumer state unresolved")
+                with self.assertRaises(ValueError):
+                    owner.validate_selection(unresolved["plan"], [row["id"]])
+        self.assertEqual(self.bytes(), before)
+
     def test_changed_extra_and_partial_inventory_contents_cannot_qualify(self):
         for change in ("modified", "extra", "partial"):
             with self.subTest(change=change):

@@ -1,6 +1,6 @@
 # Cleanup Resources Plugin: implementation status
 
-Reconciled on 29 October 2026 against source baseline `d7ead1f`. This branch is the baseline for the proposed merge; work on other branches is not part of it. This record replaces accumulated delivery checkpoints, not the product's runtime contract.
+Reconciled on 29 October 2026 against source baseline `d7ead1f`; continuation status updated on 9 November against candidate `9aa8fb4`. This record replaces accumulated delivery checkpoints, not the product's runtime contract.
 
 ## Owners and delivered scope
 
@@ -34,6 +34,6 @@ OpenCode v2 and Antigravity installation instructions and explicit-only skill me
 
 The [QA plan](qa-plan.md) maps current behavior to existing checks and separates test results from installed/native/human evidence. The [compatibility record](compatibility-plan.md) owns platform and client gaps. Neither document authorizes new host provisioning, installation, provider operations or cleanup.
 
-The [context-aware follow-up](../context-aware-resource-cleanup/plan.md) is paused and proposed. Its task-history investigation, richer lineage, exact-file cleanup, generated-output assessment exception, assessed containers and pnpm maintenance are not delivered by this branch. Any resumption must compare the actual source tree with those requirements first.
+The [context-aware continuation](../context-aware-resource-cleanup/plan.md#continuation-status--9-november-2026) is resumed: I01 task-context source is present in this candidate; I02 general/history source is separately unmerged; I03–I07 remain implementation backlog and I08 acceptance remains incomplete. Its status owner distinguishes source inclusion from evidence and authorization.
 
 Licensing remains undecided. Implementation presence, an open merge request and historical green checks do not establish release readiness or new cleanup permission.

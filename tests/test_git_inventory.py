@@ -213,6 +213,148 @@ class GitInventory(unittest.TestCase):
         self.assertNotIn("SYNTHETIC_LINKED_SECRET", json.dumps(report))
         self.assertEqual(snapshot(self.fixture), before)
 
+
+    def test_project_exclusions_block_the_first_native_git_command(self):
+        from devspace.git_inventory import _git
+        from devspace.plans import review_scope
+        excluded = self.project / "private"
+        excluded.mkdir()
+        (excluded / "hidden-name.txt").write_bytes(b"excluded bytes")
+        (self.project / "visible.txt").write_bytes(b"useful sibling")
+        before = snapshot(self.fixture)
+        for exclusion in (self.project, self.fixture, excluded, self.project / ".git",
+                          self.project / ".git/index", self.project / "missing/child"):
+            with self.subTest(exclusion=exclusion), \
+                    patch("devspace.git_inventory._git", wraps=_git) as native:
+                report = review_scope(self.project, mode="project", exclusions=[str(exclusion)])
+                native.assert_not_called()
+                self.assertFalse(report["git"]["complete"])
+                self.assertEqual(report["git"]["worktrees"], [])
+                self.assertIn("exclu", " ".join(report["git"]["limitations"]).lower())
+                if exclusion == excluded:
+                    self.assertNotIn("hidden-name.txt", json.dumps(report))
+                    self.assertTrue(any(entry["path"] == "visible.txt" for entry in report["entries"]))
+                self.assertEqual(snapshot(self.fixture), before)
+
+    def test_linked_exclusions_prevent_probes_and_preserve_unaffected_status(self):
+        from devspace.git_inventory import _git
+        from devspace.plans import review_scope
+        linked = self.fixture / "linked"
+        self.git("worktree", "add", "--detach", str(linked), "HEAD")
+        private = linked / "private"
+        private.mkdir()
+        (private / "hidden-name.txt").write_bytes(b"excluded bytes")
+        (self.project / "visible.txt").write_bytes(b"useful sibling")
+        before = snapshot(self.fixture)
+        for exclusion in (linked, private, linked / ".git"):
+            with self.subTest(exclusion=exclusion), \
+                    patch("devspace.git_inventory._git", wraps=_git) as native:
+                report = review_scope(self.project, mode="project", exclusions=[str(exclusion)])
+                self.assertFalse(any(call.args[1] == linked for call in native.call_args_list))
+                rows = {row["path"]: row for row in report["git"]["worktrees"]}
+                self.assertTrue(rows[str(self.project)]["status_complete"])
+                self.assertIn("visible.txt", rows[str(self.project)]["untracked"])
+                self.assertFalse(rows[str(linked)]["status_complete"])
+                self.assertIsNone(rows[str(linked)]["untracked"])
+                self.assertIn("exclu", rows[str(linked)]["status_reason"].lower())
+                self.assertFalse(report["git"]["complete"])
+                self.assertNotIn("hidden-name.txt", json.dumps(report))
+                self.assertFalse(any(row["scope"]["canonical"] == str(linked)
+                                     for row in report["linked_reviews"]))
+                self.assertEqual(snapshot(self.fixture), before)
+
+    def test_exclusion_case_aliases_block_selected_and_linked_probes(self):
+        from devspace.git_inventory import _git
+        from devspace.plans import review_scope
+        selected_alias = self.project.with_name("PROJECT")
+        if not selected_alias.exists() or not selected_alias.samefile(self.project):
+            self.skipTest("case-sensitive filesystem; exclusion case alias unavailable")
+        linked = self.fixture / "Retained"
+        self.git("worktree", "add", "--detach", str(linked), "HEAD")
+        linked_alias = self.fixture / "retained"
+        self.assertTrue(linked_alias.samefile(linked))
+        before = snapshot(self.fixture)
+        with patch("devspace.git_inventory._git", wraps=_git) as native:
+            selected_report = review_scope(self.project, mode="project", exclusions=[str(selected_alias)])
+            native.assert_not_called()
+        self.assertFalse(selected_report["git"]["complete"])
+        with patch("devspace.git_inventory._git", wraps=_git) as native:
+            linked_report = review_scope(self.project, mode="project", exclusions=[str(linked_alias)])
+            self.assertFalse(any(call.args[1] == linked for call in native.call_args_list))
+        rows = {row["path"]: row for row in linked_report["git"]["worktrees"]}
+        self.assertTrue(rows[str(self.project)]["status_complete"])
+        self.assertFalse(rows[str(linked)]["status_complete"])
+        self.assertEqual(snapshot(self.fixture), before)
+
+
+    def test_linked_selection_excludes_external_git_metadata_before_native_calls(self):
+        from devspace.git_inventory import _git
+        from devspace.plans import review_scope
+        linked = self.fixture / "linked"
+        self.git("worktree", "add", "--detach", str(linked), "HEAD")
+        (linked / "visible.txt").write_bytes(b"useful linked filesystem observation")
+        before = snapshot(self.fixture)
+        for exclusion in (self.project, self.project / ".git", self.project / ".git/config",
+                          self.project / ".git/worktrees/linked"):
+            with self.subTest(exclusion=exclusion), \
+                    patch("devspace.git_inventory._git", wraps=_git) as native:
+                report = review_scope(linked, mode="project", exclusions=[str(exclusion)])
+                native.assert_not_called()
+                self.assertFalse(report["git"]["complete"])
+                self.assertEqual(report["git"]["worktrees"], [])
+                self.assertIn("exclu", " ".join(report["git"]["limitations"]).lower())
+                self.assertTrue(any(entry["path"] == "visible.txt" for entry in report["entries"]))
+                self.assertEqual(snapshot(self.fixture), before)
+        unrelated = self.fixture / "unrelated"
+        unrelated.mkdir()
+        report = review_scope(linked, mode="project", exclusions=[str(unrelated)])
+        self.assertTrue(report["git"]["complete"])
+        self.assertTrue(all(row["status_complete"] for row in report["git"]["worktrees"]))
+
+
+    def test_metadata_symlink_parent_resolution_matches_native_git_before_exclusion(self):
+        from devspace.git_inventory import _git
+        from devspace.plans import review_scope
+        linked = self.fixture / "linked"
+        self.git("worktree", "add", "--detach", str(linked), "HEAD")
+        (linked / "visible.txt").write_bytes(b"unaffected filesystem observation")
+        administration = Path(os.fsdecode(self.git(
+            "rev-parse", "--path-format=absolute", "--git-dir", cwd=linked)).removesuffix("\n"))
+        common = self.project / ".git"
+        marker, common_marker = linked / ".git", administration / "commondir"
+        marker_before, common_before = marker.read_bytes(), common_marker.read_bytes()
+        decoy = self.fixture / "decoy"
+        decoy.mkdir()
+        cases = []
+        for name, target, metadata_file, prefix, flag in (
+                ("gitdir", administration, marker, b"gitdir: ", "--git-dir"),
+                ("commondir", common, common_marker, b"", "--git-common-dir")):
+            child = target / "path-resolution-child"
+            child.mkdir()
+            alias = decoy / (name + "-hop")
+            alias.symlink_to(child, target_is_directory=True)
+            cases.append((name, target, metadata_file, prefix, flag, alias / ".."))
+        for name, target, metadata_file, prefix, flag, raw_target in cases:
+            marker.write_bytes(marker_before)
+            common_marker.write_bytes(common_before)
+            metadata_file.write_bytes(prefix + os.fsencode(raw_target) + b"\n")
+            native_target = Path(os.fsdecode(self.git(
+                "rev-parse", "--path-format=absolute", flag, cwd=linked)).removesuffix("\n")).resolve(strict=True)
+            lexical_target = Path(os.path.abspath(raw_target))
+            self.assertEqual(native_target, target)
+            self.assertEqual(lexical_target, decoy)
+            self.assertNotEqual(native_target, lexical_target)
+            exclusion = target if name == "gitdir" else common / "config"
+            before = snapshot(self.fixture)
+            with self.subTest(metadata=name, native_target=native_target, lexical_target=lexical_target), \
+                    patch("devspace.git_inventory._git", wraps=_git) as native:
+                report = review_scope(linked, mode="project", exclusions=[str(exclusion)])
+                native.assert_not_called()
+                self.assertFalse(report["git"]["complete"])
+                self.assertEqual(report["git"]["worktrees"], [])
+                self.assertTrue(any(entry["path"] == "visible.txt" for entry in report["entries"]))
+                self.assertEqual(snapshot(self.fixture), before)
+
     def test_nested_project_does_not_expand_to_parent_repository(self):
         from devspace.plans import review_scope
         nested = self.project / "nested"

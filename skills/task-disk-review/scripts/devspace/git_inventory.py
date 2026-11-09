@@ -6,6 +6,8 @@ import shutil
 import subprocess
 import time
 
+from .review import path_inside
+
 
 OUTPUT_LIMIT = 1024 * 1024
 
@@ -137,7 +139,7 @@ def _status(output):
     return {key: sorted(value) for key, value in paths.items()}
 
 
-def inventory_git(selected, *, max_worktrees=32, timeout=10.0, cancelled=None):
+def inventory_git(selected, *, exclusions=(), max_worktrees=32, timeout=10.0, cancelled=None):
     """Inventory Git-discovered worktrees without network access or index refresh.
 
     `complete` means these finite Git observations succeeded. It never describes
@@ -161,10 +163,64 @@ def inventory_git(selected, *, max_worktrees=32, timeout=10.0, cancelled=None):
     def git(directory, *arguments):
         return _git(executable, directory, arguments, deadline, cancelled)
 
+    excluded_paths = [Path(os.path.abspath(value)) for value in exclusions]
+
+    def check_exclusions(directory):
+        # Broad Git commands can enumerate descendants or read repository metadata.
+        # Refuse the entire affected checkout before any native probe.
+        if any(path_inside(directory, excluded) or path_inside(excluded, directory)
+               for excluded in excluded_paths):
+            raise InspectionUnavailable("Git scope overlaps an exclusion; inspection skipped and state unknown")
+
+
+    def metadata_target(path, prefix=b""):
+        # Reuse bounded, descriptor-based Git metadata reads after module loading.
+        from .git_worktree import _metadata_file
+        check_exclusions(path)
+        try:
+            payload, _ = _metadata_file(path)
+        except ValueError:
+            raise InspectionUnavailable("Git link metadata unavailable; inspection skipped and state unknown") from None
+        if not payload.startswith(prefix):
+            raise InspectionUnavailable("Unsupported Git metadata link; inspection skipped and state unknown")
+        value = payload[len(prefix):].removesuffix(b"\n")
+        if not value or b"\n" in value or b"\0" in value:
+            raise InspectionUnavailable("Unsupported Git metadata link; inspection skipped and state unknown")
+        target = path.parent / os.fsdecode(value)
+        check_exclusions(target)
+        try:
+            resolved = target.resolve(strict=True)
+        except (OSError, RuntimeError):
+            raise InspectionUnavailable("Git metadata target unavailable; inspection skipped and state unknown") from None
+        # A symlink before .. can make Git use a different directory than abspath.
+        if resolved != Path(os.path.abspath(target)):
+            raise InspectionUnavailable("Git metadata target traverses a linked path; inspection skipped and state unknown")
+        return resolved
+
+    def check_metadata(directory):
+        if not excluded_paths:
+            return
+        metadata = directory / ".git"
+        check_exclusions(metadata)
+        if not metadata.is_dir():
+            metadata = metadata_target(metadata, b"gitdir: ")
+        check_exclusions(metadata)
+        if metadata.resolve(strict=True) != metadata or not metadata.is_dir():
+            raise InspectionUnavailable("Git metadata directory unavailable or linked; state unknown")
+        try:
+            common = metadata_target(metadata / "commondir")
+        except FileNotFoundError:
+            return
+        check_exclusions(common)
+        if common.resolve(strict=True) != common or not common.is_dir():
+            raise InspectionUnavailable("Common Git metadata directory unavailable or linked; state unknown")
+
     try:
         selected = Path(os.path.abspath(os.fspath(selected)))
+        check_exclusions(selected)
         if selected.resolve(strict=True) != selected or not selected.is_dir():
             raise InspectionUnavailable("Selected Git scope is missing or linked; not inspected")
+        check_metadata(selected)
         records = _worktrees(git(selected, "worktree", "list", "--porcelain", "-z"))
         if str(selected) not in {record["path"] for record in records}:
             raise InspectionUnavailable("Selected directory is not a worktree root; parent/linked scope not expanded")
@@ -184,8 +240,10 @@ def inventory_git(selected, *, max_worktrees=32, timeout=10.0, cancelled=None):
             result["worktrees"].append(record)
             try:
                 directory = Path(record["path"])
+                check_exclusions(directory)
                 if record["bare"] or directory.resolve(strict=True) != directory or not directory.is_dir():
                     raise InspectionUnavailable("Bare, missing or linked worktree; status unknown")
+                check_metadata(directory)
                 try:
                     filters = git(directory, "config", "--null", "--name-only", "--get-regexp",
                                   r"^filter\..*\.(clean|process)$")

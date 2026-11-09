@@ -1,8 +1,8 @@
 # Context-aware resource cleanup: proposed requirements
 
-Status: paused future work. Reconciled on 29 October 2026 against source baseline `d7ead1f`; the date in this filename identifies the original design, not an implementation release. This is the canonical requirements owner for the follow-up. The [current README](../../../README.md) remains authoritative for shipped behavior.
+Status: implementation resumed by the user on 9 November 2026; see [continuation status](../../incremental-and-test-plans/context-aware-resource-cleanup/plan.md#continuation-status--9-november-2026) for implemented source, separate branch work and acceptance gaps. This updates the 29 October reconciliation against `d7ead1f`; the filename date identifies the original design, not an implementation release. This remains the canonical requirements owner. The [current README](../../../README.md) owns runtime behavior.
 
-The [incremental plan](../../incremental-and-test-plans/context-aware-resource-cleanup/plan.md) maps these requirements to future increments and current gaps. Its [QA plan](../../incremental-and-test-plans/context-aware-resource-cleanup/qa-plan.md) owns behavioral acceptance. Neither this proposal nor historical work on another branch authorizes resumption, resource mutation or external evaluation.
+The [incremental plan](../../incremental-and-test-plans/context-aware-resource-cleanup/plan.md) maps these requirements to increments and current gaps. Its [QA plan](../../incremental-and-test-plans/context-aware-resource-cleanup/qa-plan.md) owns behavioral acceptance. The explicit resumption authorizes repository implementation and its required reviews; this design and historical branch work grant no resource-mutation or external-evaluation authority.
 
 ## 1. Task-context assessment
 
