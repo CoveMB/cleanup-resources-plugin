@@ -14,11 +14,19 @@ Future exact-file, generated-output, container and pnpm contracts remain proposa
 
 I02 completed the three independent source-review assignments and passing re-reviews of the affected guidance repair. The [QA reconciliation](qa-plan.md#i02-evidence-reconciliation--9-november-2026) attributes hosted and bounded synthetic observations to their actual subjects and preserves their acceptance limits.
 
-The [I03 detailed plan](i03-worktree-lineage.md) completed three separate sequential independent plan reviews. Four material findings were repaired: schedule optional lineage after all ordinary assessment and plan construction; require direct commit typing for recovery roots; revalidate shallow/graft policy after comparisons; and test direct metadata acquisition boundaries alongside native calls. Architecture and verification re-reviews accepted their affected scopes. These are plan gates, not implemented lineage behavior or Q03 acceptance.
+The [I03 detailed plan](i03-worktree-lineage.md) completed three separate sequential independent plan reviews. Four material findings were repaired: schedule optional lineage after all ordinary assessment and plan construction; require direct commit typing for recovery roots; revalidate shallow/graft policy after comparisons; and test direct metadata acquisition boundaries alongside native calls. Architecture and verification re-reviews accepted their affected scopes. Those were plan gates. Both tasks are now implemented; source reviews and subsequent evidence remain separate from Q03 acceptance.
+
+## I03 implementation review and evidence
+
+Task 1 and Task 2 each collected all three independent source-review reports before repairs. Task 2 repairs corrected claim-aware unresolved output, final binding/deadline/cancellation handling and fixtures that had not reached their claimed native boundary. The affected production reviews closed before CI; the original short-circuited negative evidence remains qualified rather than retrospectively treated as proof.
+
+Task 1's four-job hosted matrix passed at its file-identical published subject. Task 2's original hosted matrix at `38a1e76` passed Linux and failed both Mac jobs; those failures remain evidence. The subsequent `ae27f0e` correction changes tests only and preserves all 15 runtime payloads. Affected requirements and safety reviews approved, with architecture carried for the unchanged runtime; affected source-review gates are closed. The repair was published as tree-identical `d26d3c2`; the final hosted matrix passed all four jobs. [QA reconciliation](qa-plan.md#i03-evidence-reconciliation--9-november-2026) owns exact subjects, counts, failures and final publication fields.
+
+An independent finite paired evaluation of baseline `07e4407` and candidate `1753e55` retained both original observations: both found the same two useful candidates and preserved the other resources. Richer candidate advisory structure did not establish a recommendation-quality advantage. Later test-only changes do not rebind those model launches. Broader Q03/Q09, installed/native, Q10 and human acceptance remain open.
 
 ## Comparison gap
 
-Historical investigator evaluation and the bounded I02 observations do not establish the complete paired baseline/revised general-history comparison required by the design. Revised-only observations cannot prove measured improvement or supply missing baseline outcomes.
+Historical investigator evaluation, bounded I02 observations and the finite I03 pair do not establish the complete paired baseline/revised comparison required by the design. Revised-only observations cannot prove measured improvement or supply missing baseline outcomes.
 
 The [QA plan](qa-plan.md) therefore keeps Q09 paired comparison and Q10 two existing-resource read-only trials separate. Both use independent expectations; practical trials must include useful supported candidacy and protected/unknown cases without manufactured evidence. All-Review is not automatically a passing outcome.
 
@@ -26,4 +34,4 @@ The [QA plan](qa-plan.md) therefore keeps Q09 paired comparison and Q10 two exis
 
 Independent read-only review of the seven original follow-up records identified conflicting paused/active instructions, off-branch delivery claims and private operational references. This reconciliation removes those publication blockers while retaining requirements and unfulfilled acceptance obligations.
 
-The original design's three independent review scopes—requirement fidelity, architecture/simplicity and verification/safety—apply sequentially to every resumed increment. The completed I02 source and I03 plan gates above do not replace future implementation reviews, runtime/model evidence, provider trials or installed/practical acceptance.
+The original design's three independent review scopes—requirement fidelity, architecture/simplicity and verification/safety—apply sequentially to every resumed increment. The completed I02 and I03 gates and finite evidence above do not replace verification of later increments, broader model coverage, provider trials or installed/practical acceptance.
