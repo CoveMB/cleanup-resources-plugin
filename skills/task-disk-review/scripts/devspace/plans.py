@@ -484,7 +484,7 @@ def review_scope(selected, *, npm_caches=(), git_lineage=None, **options):
             report["coverage"]["complete"] = False
     if git_lineage is not None:
         from .git_inventory import observe_lineage, _lineage_result, InspectionCancelled, InspectionUnavailable
-        report["git_lineage"] = _lineage_result()
+        report["git_lineage"] = _lineage_result(claim=git_lineage.get("integration"))
         host_matches = options.get("mode") != "global" or selected.get("host_identity", report["host"]["identity"]) == report["host"]["identity"]
         if not report["invalid_scope"] and not report["cancelled"] and host_matches and time.monotonic() < deadline:
             inventories = report.get("git_inventories", []) if options.get("mode") == "global" else [
@@ -500,7 +500,7 @@ def review_scope(selected, *, npm_caches=(), git_lineage=None, **options):
                     report["cancelled"] = True
                     report["coverage"]["stop_reason"] = "Git lineage cancelled"
                 except InspectionUnavailable:
-                    report["git_lineage"] = _lineage_result("unavailable", "inspection_unavailable")
+                    report["git_lineage"] = _lineage_result("unavailable", "inspection_unavailable", claim=git_lineage.get("integration"))
         if report["git_lineage"]["status"] != "observed":
             report["coverage"]["complete"] = False
     return report

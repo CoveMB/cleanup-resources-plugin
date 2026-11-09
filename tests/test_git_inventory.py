@@ -859,5 +859,611 @@ class GitInventory(unittest.TestCase):
         self.assertNotEqual(result["status"], "observed")
 
 
+    def integration_fixture(self, kind="merge"):
+        """Real history: independent destination work, then explicit integration."""
+        linked, request, record = self.lineage_fixture(linked_name="integration-checkout")
+        base = self.git("rev-parse", "refs/heads/destination").strip().decode()
+        if kind == "squash":
+            (self.project / "second.txt").write_text("second source commit\n")
+            self.git("add", "second.txt")
+            self.git("commit", "-m", "Second source")
+        source = self.git("rev-parse", "HEAD").strip().decode()
+        self.git("update-ref", "refs/heads/retained", source)
+        self.git("checkout", "--detach", source, cwd=linked)
+        self.git("checkout", "destination")
+        (self.project / "destination-only.txt").write_text("independent destination work\n")
+        self.git("add", "destination-only.txt")
+        self.git("commit", "-m", "Destination work")
+        if kind == "merge":
+            self.git("merge", "--no-ff", "--no-edit", source)
+        elif kind == "squash":
+            self.git("merge", "--squash", source)
+            self.git("commit", "-m", "Squash source")
+        else:
+            self.git("cherry-pick", source)
+        destination = self.git("rev-parse", "HEAD").strip().decode()
+        request["expected_head"] = source
+        request["integration"] = {"kind": "merge" if kind == "merge" else "squash",
+                                  "source_commit": source, "destination_commit": destination}
+        if kind != "merge": request["integration"]["source_base_commit"] = base
+        record = next(r for r in self.inventory()["worktrees"] if r["path"] == str(linked))
+        return linked, request, record
+
+    def test_lineage_integration_claim_validation(self):
+        # Catches accepting revision expressions, missing explicit bases or extra authority fields.
+        from devspace.git_inventory import validate_lineage_request
+        linked, request, record = self.lineage_fixture()
+        source = request["expected_head"]
+        valid = {"kind": "merge", "source_commit": source, "destination_commit": source}
+        for claim in (valid, {**valid, "kind": "squash", "source_base_commit": source}):
+            self.assertEqual(validate_lineage_request({**request, "integration": claim})["integration"], claim)
+        for claim in (None, [], {}, {**valid, "kind": "cherry-pick"}, {**valid, "source_commit": "HEAD"},
+                      {**valid, "destination_commit": "-"+"a"*39}, {**valid, "source_commit": "A"*40},
+                      {**valid, "kind": "squash"}, {**valid, "source_base_commit": source},
+                      {**valid, "verified": True}, {**valid, "source_commit": True}):
+            with self.subTest(claim=claim), patch("devspace.git_inventory._git", side_effect=AssertionError("shape must not probe")):
+                with self.assertRaises(ValueError):
+                    validate_lineage_request({**request, "integration": claim})
+
+    def test_lineage_integration_current_and_old_merge(self):
+        # Catches promotion of an older merged source to integration of actual current HEAD.
+        linked, request, record = self.integration_fixture()
+        current = self.lineage_trial(request, record)
+        evidence = current["integration"]
+        self.assertEqual(evidence["status"], "observed", current)
+        for field in ("source_matches_head", "source_in_head", "destination_in_current_destination",
+                      "current_destination_matches_claim", "current_destination_tree_matches_claim"):
+            self.assertIs(evidence[field], True, field)
+        self.assertEqual(evidence["source_in_parents"], [False, True])
+        self.assertEqual(evidence["destination_parent_count"], 2)
+        self.assertIs(current["ancestry"]["head_in_destination"], True)
+        self.assertEqual(current["patch_equivalence"]["status"], "not_requested")
+        # Claim existence does not make it reachable from the bound current destination.
+        self.git("update-ref", request["destination_ref"], request["expected_head"])
+        outside = self.lineage_trial(request, record)
+        self.assertIs(outside["integration"]["destination_in_current_destination"], False)
+        self.assertIs(outside["integration"]["current_destination_matches_claim"], False)
+        self.git("update-ref", request["destination_ref"], request["integration"]["destination_commit"])
+        self.git("checkout", "fixture-main")
+        (self.project / "after-merge.txt").write_text("new unmerged source\n")
+        self.git("add", "after-merge.txt")
+        self.git("commit", "-m", "New unmerged source")
+        head = self.git("rev-parse", "HEAD").strip().decode()
+        self.git("update-ref", "refs/heads/retained", head)
+        self.git("checkout", "--detach", head, cwd=linked)
+        request["expected_head"] = head
+        record = next(r for r in self.inventory()["worktrees"] if r["path"] == str(linked))
+        old = self.lineage_trial(request, record)
+        self.assertIs(old["integration"]["source_matches_head"], False)
+        self.assertIs(old["integration"]["source_in_head"], True)
+        self.assertEqual(old["integration"]["source_in_parents"], [False, True])
+        self.assertIs(old["ancestry"]["head_in_destination"], False)
+        self.assertIs(old["retention"]["head_in_ref"], True)
+        self.assertEqual(old["binding"]["head"], head)
+        self.assertEqual(old["integration"]["source_commit"], request["integration"]["source_commit"])
+
+    def test_lineage_integration_squash_exact_delta_and_sentinels(self):
+        # Catches patch-ID substitution, omitted no-ext-diff/textconv and provenance promotion.
+        from devspace.git_inventory import _git
+        linked, request, record = self.integration_fixture("squash")
+        marker = self.fixture / "external-command-executed"
+        script = self.fixture / "external-command.py"
+        script.write_text("from pathlib import Path\nPath("+repr(str(marker))+ ").write_text('executed')\n")
+        command = shlex.join([sys.executable, str(script)])
+        (self.project / ".gitattributes").write_text("*.txt diff=fixture\n")
+        self.git("config", "diff.external", command)
+        self.git("config", "diff.fixture.textconv", command)
+        # Establish that each configured sentinel really executes when explicitly enabled.
+        claim = request["integration"]
+        self.git("diff", "--ext-diff", claim["source_base_commit"], claim["source_commit"], "--")
+        self.assertTrue(marker.exists(), "external diff sentinel is not armed")
+        marker.unlink()
+        self.git("config", "--unset", "diff.external")
+        self.git("diff", "--textconv", claim["source_base_commit"], claim["source_commit"], "--")
+        self.assertTrue(marker.exists(), "textconv sentinel is not armed")
+        marker.unlink()
+        self.git("config", "diff.external", command)
+        with patch("devspace.git_inventory._git", wraps=_git) as native:
+            result = self.lineage_trial(request, record)
+        comparison = result["patch_equivalence"]
+        self.assertEqual(comparison["method"], "exact-tree-entry-delta")
+        self.assertIs(comparison["equal"], True, result)
+        self.assertEqual(comparison["source_path_count"], 2)
+        self.assertEqual(comparison["destination_path_count"], 2)
+        self.assertEqual(result["integration"]["squash_provenance"], "unverified")
+        self.assertEqual(result["integration"]["current_content_preservation"], "unestablished")
+        self.assertIs(result["ancestry"]["head_in_destination"], False)
+        diffs = [c.args[2] for c in native.call_args_list if "diff-tree" in c.args[2]]
+        self.assertEqual(len(diffs), 2)
+        for args in diffs:
+            for flag in ("--raw", "-r", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", "--abbrev=40"):
+                self.assertIn(flag, args)
+        self.assertFalse(marker.exists())
+        printed = json.dumps(result)
+        self.assertNotIn("second source commit", printed)
+        self.assertNotIn("destination-only.txt", printed)
+        self.assertNotIn("external-command", printed)
+
+    def test_lineage_integration_cherry_pick_is_delta_not_ancestry(self):
+        linked, request, record = self.integration_fixture("cherry-pick")
+        result = self.lineage_trial(request, record)
+        self.assertIs(result["patch_equivalence"]["equal"], True, result)
+        self.assertIs(result["ancestry"]["head_in_destination"], False)
+        self.assertEqual(result["integration"]["squash_provenance"], "unverified")
+        self.assertEqual(result["release"], "not_established")
+
+    def test_lineage_integration_revert_and_later_destination(self):
+        # Catches graph reachability being used as current semantic preservation.
+        linked, request, record = self.integration_fixture()
+        merge = request["integration"]["destination_commit"]
+        for operation in ("later", "revert"):
+            if operation == "later":
+                (self.project / "later-destination.txt").write_text("later destination work\n")
+                self.git("add", "later-destination.txt")
+                self.git("commit", "-m", "Later destination")
+            else:
+                self.git("revert", "--no-edit", "-m", "1", merge)
+            result = self.lineage_trial(request, record)
+            evidence = result["integration"]
+            self.assertIs(result["ancestry"]["head_in_destination"], True)
+            self.assertIs(evidence["destination_in_current_destination"], True)
+            self.assertIs(evidence["current_destination_matches_claim"], False)
+            self.assertIs(evidence["current_destination_tree_matches_claim"], False)
+            self.assertEqual(evidence["current_destination_commit"], self.git("rev-parse", "HEAD").strip().decode())
+            self.assertEqual(evidence["current_content_preservation"], "unestablished")
+            self.assertNotIn("reverted", json.dumps(result))
+            self.assertEqual(result["release"], "not_established")
+        # A later empty commit changes commit identity without changing its tree.
+        self.git("reset", "--hard", merge)
+        self.git("commit", "--allow-empty", "-m", "Same tree later")
+        same_tree = self.lineage_trial(request, record)["integration"]
+        self.assertIs(same_tree["current_destination_matches_claim"], False)
+        self.assertIs(same_tree["current_destination_tree_matches_claim"], True)
+        self.assertEqual(same_tree["current_content_preservation"], "unestablished")
+
+    def test_lineage_integration_wrong_base_whitespace_and_nonempty(self):
+        # Catches equal empty deltas, wrong-base equivalence and whitespace normalization.
+        linked, request, record = self.integration_fixture("squash")
+        claim = request["integration"]
+        first_source = self.git("rev-parse", claim["source_commit"]+"^").strip().decode()
+        for base, want in ((first_source, False), (claim["source_commit"], None)):
+            trial = {**request, "integration": {**claim, "source_base_commit": base}}
+            result = self.lineage_trial(trial, record)
+            self.assertIs(result["patch_equivalence"]["equal"], want, result)
+            self.assertIs(result["retention"]["head_in_ref"], True)
+        # Same paths, whitespace-only destination change: exact blob identities differ.
+        self.git("reset", "--hard", claim["destination_commit"]+"^")
+        self.git("merge", "--squash", claim["source_commit"])
+        (self.project / "second.txt").write_text("second  source commit\n")
+        self.git("add", "second.txt")
+        self.git("commit", "-m", "Whitespace variant")
+        destination = self.git("rev-parse", "HEAD").strip().decode()
+        result = self.lineage_trial({**request, "integration": {**claim, "destination_commit": destination}}, record)
+        self.assertIs(result["patch_equivalence"]["equal"], False, result)
+        self.assertEqual(result["integration"]["squash_provenance"], "unverified")
+        self.git("commit", "--allow-empty", "-m", "Empty destination delta")
+        empty = self.git("rev-parse", "HEAD").strip().decode()
+        result = self.lineage_trial({**request, "integration": {**claim, "destination_commit": empty}}, record)
+        self.assertIsNone(result["patch_equivalence"]["equal"], result)
+        self.assertIs(result["retention"]["head_in_ref"], True)
+
+    def test_lineage_integration_endpoint_and_topology_failures(self):
+        # Catches missing/noncommit/unrelated endpoint promotion and unsupported parent topology.
+        linked, request, record = self.integration_fixture("squash")
+        claim = request["integration"]
+        blob = self.git("rev-parse", "HEAD:later.txt").strip().decode()
+        tree = self.git("rev-parse", "HEAD^{tree}").strip().decode()
+        self.git("tag", "-a", "endpoint-tag", "-m", "Endpoint tag", claim["source_commit"])
+        tag = self.git("rev-parse", "endpoint-tag").strip().decode()
+        root = self.git("rev-list", "--max-parents=0", "HEAD").strip().decode()
+        unrelated = self.git("commit-tree", tree, "-m", "Unrelated root").strip().decode()
+        for delta in ({"source_commit": unrelated}, {"source_commit": "f"*40}, {"destination_commit": "e"*40},
+                      {"source_base_commit": "d"*40}, {"source_commit": blob},
+                      {"source_base_commit": tree}, {"destination_commit": tag},
+                      {"source_base_commit": claim["destination_commit"]}, {"destination_commit": root},
+                      {"source_commit": "a"*64}):
+            with self.subTest(delta=delta):
+                result = self.lineage_trial({**request, "integration": {**claim, **delta}}, record)
+                self.assertIsNone(result["patch_equivalence"]["equal"], result)
+                self.assertNotEqual(result["integration"]["status"], "observed")
+                self.assertIs(result["retention"]["head_in_ref"], True)
+                self.assertIs(result["ancestry"]["head_in_destination"], False)
+                if delta.get("source_commit") == unrelated:
+                    self.assertIs(result["integration"]["source_in_head"], False)
+        self.git("merge", "--no-ff", "--no-edit", claim["source_commit"])
+        merge = self.git("rev-parse", "HEAD").strip().decode()
+        result = self.lineage_trial({**request, "integration": {**claim, "destination_commit": merge}}, record)
+        self.assertIsNone(result["patch_equivalence"]["equal"])
+        self.assertEqual(result["integration"]["destination_parent_count"], 2)
+        # Conversely a claimed merge on a real one-parent commit is unresolved.
+        merge_claim = {k: v for k, v in claim.items() if k != "source_base_commit"}
+        merge_claim["kind"] = "merge"
+        result = self.lineage_trial({**request, "integration": merge_claim}, record)
+        self.assertEqual(result["integration"]["status"], "unavailable")
+        self.assertIsNone(result["integration"]["source_in_parents"])
+        # A real three-parent commit is also outside the explicitly two-parent contract.
+        octopus = self.git("commit-tree", tree, "-p", claim["source_commit"], "-p", root,
+                           "-p", claim["destination_commit"], "-m", "Three parents").strip().decode()
+        result = self.lineage_trial({**request, "integration": {**merge_claim, "destination_commit": octopus}}, record)
+        self.assertEqual(result["integration"]["status"], "unavailable")
+        self.assertEqual(result["integration"]["destination_parent_count"], 3)
+        self.assertIsNone(result["integration"]["source_in_parents"])
+
+    def test_lineage_integration_changed_base_objects(self):
+        # Same conceptual edit after a changed file base must not equal exact object deltas.
+        linked, request, record = self.lineage_fixture(linked_name="changed-base")
+        base = self.git("rev-parse", "refs/heads/destination").strip().decode()
+        self.git("checkout", "-b", "changed-source", base)
+        (self.project / "dirty.txt").write_text("original dirty.txt\nfeature\n")
+        self.git("add", "dirty.txt")
+        self.git("commit", "-m", "Source edit")
+        source = self.git("rev-parse", "HEAD").strip().decode()
+        self.git("update-ref", "refs/heads/retained", source)
+        self.git("checkout", "--detach", source, cwd=linked)
+        self.git("checkout", "destination")
+        (self.project / "dirty.txt").write_text("changed base\n")
+        self.git("add", "dirty.txt")
+        self.git("commit", "-m", "Changed base")
+        (self.project / "dirty.txt").write_text("changed base\nfeature\n")
+        self.git("add", "dirty.txt")
+        self.git("commit", "-m", "Same conceptual edit")
+        destination = self.git("rev-parse", "HEAD").strip().decode()
+        request.update(expected_head=source, integration={"kind": "squash", "source_base_commit": base,
+                       "source_commit": source, "destination_commit": destination})
+        record = next(r for r in self.inventory()["worktrees"] if r["path"] == str(linked))
+        result = self.lineage_trial(request, record)
+        self.assertIs(result["patch_equivalence"]["equal"], False, result)
+        self.assertEqual(result["integration"]["squash_provenance"], "unverified")
+
+    def test_lineage_integration_limits_and_gitlinks(self):
+        # Catches actual next-size path overflow and raw gitlink entries being certified.
+        from devspace.git_inventory import _git
+        linked, request, record = self.integration_fixture("squash")
+        claim = request["integration"]
+        self.git("checkout", "fixture-main")
+        # The source already adds later.txt and second.txt: 127 additions make 129 total.
+        for number in range(127): (self.project / ("delta-"+str(number))).write_text("bounded\n")
+        self.git("add", ".")
+        self.git("commit", "-m", "129 total changed paths")
+        large = self.git("rev-parse", "HEAD").strip().decode()
+        self.git("update-ref", request["retained_ref"], large)
+        self.git("checkout", "--detach", large, cwd=linked)
+        request.update(expected_head=large, integration={**claim, "source_commit": large})
+        record = next(row for row in self.inventory()["worktrees"] if row["path"] == str(linked))
+        deltas = []
+        def native_delta(executable, directory, arguments, deadline, cancelled):
+            raw = _git(executable, directory, arguments, deadline, cancelled)
+            if "diff-tree" in arguments: deltas.append(raw)
+            return raw
+        with patch("devspace.git_inventory._git", side_effect=native_delta):
+            result = self.lineage_trial(request, record)
+        self.assertEqual(len(deltas), 1, "129-path source delta must reach the real comparison")
+        self.assertEqual(deltas[0].count(b"\0") // 2, 129)
+        self.assertIs(result["integration"]["source_matches_head"], True)
+        self.assertIs(result["integration"]["source_in_head"], True)
+        self.assertEqual(result["integration"]["destination_parent_count"], 1)
+        self.assertEqual(result["integration"]["reason"], "comparison_unavailable")
+        self.assertIsNone(result["patch_equivalence"]["equal"], result)
+        self.assertIs(result["retention"]["head_in_ref"], True)
+        self.assertIs(result["ancestry"]["head_in_destination"], False)
+        self.git("reset", "--hard", claim["source_commit"])
+        self.git("update-index", "--add", "--cacheinfo", "160000,"+claim["source_commit"]+",module")
+        self.git("commit", "-m", "Gitlink source")
+        gitlink = self.git("rev-parse", "HEAD").strip().decode()
+        self.git("update-ref", request["retained_ref"], gitlink)
+        self.git("checkout", "--detach", gitlink, cwd=linked)
+        request.update(expected_head=gitlink, integration={**claim, "source_commit": gitlink})
+        record = next(row for row in self.inventory()["worktrees"] if row["path"] == str(linked))
+        deltas.clear()
+        with patch("devspace.git_inventory._git", side_effect=native_delta):
+            result = self.lineage_trial(request, record)
+        self.assertEqual(len(deltas), 1, "gitlink source delta must reach raw entry validation")
+        self.assertIn(b":000000 160000 ", deltas[0])
+        self.assertIs(result["integration"]["source_matches_head"], True)
+        self.assertIs(result["integration"]["source_in_head"], True)
+        self.assertEqual(result["integration"]["reason"], "comparison_unavailable")
+        self.assertIsNone(result["patch_equivalence"]["equal"], result)
+        self.assertIs(result["retention"]["head_in_ref"], True)
+        self.assertIs(result["ancestry"]["head_in_destination"], False)
+
+    def test_lineage_integration_shallow_and_comparison_errors(self):
+        from devspace.git_inventory import _git, GitRefused, InspectionUnavailable
+        linked, request, record = self.integration_fixture("squash")
+        shallow = self.project / ".git/shallow"
+        shallow.write_text(request["expected_head"]+"\n")
+        result = self.lineage_trial(request, record)
+        self.assertIsNone(result["patch_equivalence"]["equal"], result)
+        self.assertIsNone(result["integration"]["source_in_head"])
+        shallow.unlink()
+        for error in (GitRefused(128), InspectionUnavailable("SYNTHETIC_REFLOG_SECRET")):
+            def failed(executable, directory, arguments, deadline, cancelled):
+                if "diff-tree" in arguments: raise error
+                return _git(executable, directory, arguments, deadline, cancelled)
+            with patch("devspace.git_inventory._git", side_effect=failed):
+                result = self.lineage_trial(request, record)
+            self.assertIsNone(result["patch_equivalence"]["equal"])
+            self.assertIs(result["retention"]["head_in_ref"], True)
+            self.assertIs(result["ancestry"]["head_in_destination"], False)
+        # Prove raw fixture size independently, then reach the actual bounded runner's cap.
+        # Keep this source growth distinct from the bound current destination ref.
+        self.git("checkout", "-b", "oversized-source")
+        long_path = "x"*240
+        directory = self.project
+        for _ in range(6):
+            directory /= long_path
+            directory.mkdir()
+        for number in range(800): (directory / str(number)).write_text("metadata limit\n")
+        self.git("add", ".")
+        self.git("commit", "-m", "Oversized metadata delta")
+        large = self.git("rev-parse", "HEAD").strip().decode()
+        base = request["integration"]["destination_commit"]
+        raw = self.git("diff-tree", "--no-commit-id", "--raw", "-r", "-z", "--no-renames",
+                       "--no-ext-diff", "--no-textconv", "--abbrev=40", base, large, "--")
+        self.assertGreater(len(raw), 1024*1024, "fixture must exceed the actual 1 MiB response cap")
+        self.git("update-ref", request["retained_ref"], large)
+        self.git("checkout", "--detach", large, cwd=linked)
+        request.update(expected_head=large, integration={**request["integration"], "source_commit": large,
+                                                        "source_base_commit": base})
+        record = next(row for row in self.inventory()["worktrees"] if row["path"] == str(linked))
+        attempted, refusals = [], []
+        def bounded_delta(executable, directory, arguments, deadline, cancelled):
+            if "diff-tree" not in arguments:
+                return _git(executable, directory, arguments, deadline, cancelled)
+            attempted.append(arguments)
+            try:
+                return _git(executable, directory, arguments, deadline, cancelled)
+            except InspectionUnavailable as error:
+                refusals.append(str(error))
+                raise
+        with patch("devspace.git_inventory._git", side_effect=bounded_delta):
+            result = self.lineage_trial(request, record)
+        self.assertEqual(len(attempted), 1, "oversized source delta must reach the real bounded runner")
+        self.assertEqual(attempted[0][-3:], [base, large, "--"])
+        self.assertEqual(refusals, ["Git output limit; truncated state is unknown"])
+        self.assertIs(result["integration"]["source_matches_head"], True)
+        self.assertIs(result["integration"]["source_in_head"], True)
+        self.assertEqual(result["integration"]["reason"], "comparison_unavailable")
+        self.assertIsNone(result["patch_equivalence"]["equal"], result)
+        self.assertIs(result["retention"]["head_in_ref"], True)
+        self.assertIs(result["ancestry"]["head_in_destination"], False)
+
+    def test_lineage_integration_graph_policy_drift(self):
+        # Catches comparisons performed after/bypassing final path, ref and graph-policy checks.
+        from devspace.git_inventory import _git, observe_lineage, InspectionUnavailable
+        linked, request, record = self.integration_fixture("squash")
+        for drift in ("shallow", "info/grafts", "destination-ref", "timeout"):
+            expected_after = None
+            original_record = copy.deepcopy(record)
+            fired = False
+            clock = [time.monotonic()]
+            changed_path = self.project / ".git" / drift
+            original_destination = request["integration"]["destination_commit"]
+            diff_count = 0
+            def mutate(executable, directory, arguments, deadline, cancelled):
+                nonlocal fired, diff_count, expected_after
+                output = _git(executable, directory, arguments, deadline, cancelled)
+                if "diff-tree" in arguments:
+                    diff_count += 1
+                    if diff_count == 2:
+                        fired = True
+                        if drift == "destination-ref":
+                            self.git("update-ref", request["destination_ref"], request["expected_head"])
+                        elif drift == "timeout": clock[0] = deadline + 1
+                        else: changed_path.write_text(request["expected_head"]+"\n")
+                        expected_after = lineage_snapshot(self.fixture)
+                return output
+            with patch("devspace.git_inventory._git", side_effect=mutate), \
+                    patch("devspace.git_inventory.time.monotonic", side_effect=lambda: clock[0]):
+                result = observe_lineage(self.project, record, request, deadline=clock[0]+10)
+            self.assertTrue(fired)
+            self.assertEqual(lineage_snapshot(self.fixture), expected_after)
+            self.assertEqual(record, original_record)
+            self.assertEqual(result["status"], "changed", result)
+            for category, field in (("retention", "head_in_ref"), ("ancestry", "head_in_destination"),
+                                    ("recovery", "retained"), ("patch_equivalence", "equal")):
+                self.assertIsNone(result[category][field], (category, result))
+            for field in ("source_matches_head", "source_in_head", "source_in_parents", "destination_parent_count",
+                          "destination_in_current_destination", "current_destination_matches_claim",
+                          "current_destination_tree_matches_claim", "current_destination_commit"):
+                self.assertIsNone(result["integration"][field], (field, result))
+            self.assertIsNone(result["patch_equivalence"]["source_path_count"])
+            self.assertIsNone(result["patch_equivalence"]["destination_path_count"])
+            self.assertIsNone(result["patch_equivalence"]["destination_base_commit"])
+            if drift == "destination-ref": self.git("update-ref", request["destination_ref"], original_destination)
+            elif drift != "timeout": changed_path.unlink()
+
+
+    def test_lineage_integration_final_administration_completion_guard(self):
+        # Catches final-read cancellation lost on actual drift or supported read failures.
+        from devspace import git_inventory as inventory, git_worktree as adapter
+        linked, request, record = self.integration_fixture("squash")
+        real_administration = adapter._administration_state
+        real_exclusions = inventory._check_exclusions
+        for outcome, cancel_after in (("unchanged", False), ("unchanged", True), ("drift", False),
+                                      ("drift", True), ("ValueError", False), ("ValueError", True),
+                                      ("OSError", False), ("OSError", True), ("deadline", False)):
+            reads = 0
+            completed_last_read = False
+            clock = [time.monotonic()]
+            deadline = clock[0] + 10
+            expected_after = lineage_snapshot(self.fixture)
+            original_record = copy.deepcopy(record)
+            drift_path = None
+            drift_original = None
+            def administration(path):
+                nonlocal reads, completed_last_read, expected_after, drift_path, drift_original
+                reads += 1
+                if reads == 2 and outcome == "drift":
+                    drift_path = path / "ORIG_HEAD"
+                    drift_original = drift_path.read_bytes() if drift_path.exists() else None
+                    changed_root = request["integration"]["destination_commit"]
+                    if drift_original == (changed_root+"\n").encode(): changed_root = request["expected_head"]
+                    drift_path.write_text(changed_root+"\n")
+                result = real_administration(path)
+                if reads == 2:
+                    completed_last_read = True
+                    expected_after = lineage_snapshot(self.fixture)
+                    if outcome == "deadline": clock[0] = deadline + 1
+                    if outcome == "ValueError": raise ValueError("controlled final metadata failure")
+                    if outcome == "OSError": raise OSError("controlled final metadata failure")
+                return result
+            def exclusions(*args):
+                self.assertFalse(completed_last_read, "completion decision must acquire no more metadata")
+                return real_exclusions(*args)
+            with self.subTest(outcome=outcome, cancelled=cancel_after):
+                try:
+                    with patch("devspace.git_worktree._administration_state", side_effect=administration), \
+                            patch("devspace.git_inventory._check_exclusions", side_effect=exclusions), \
+                            patch("devspace.git_inventory.time.monotonic", side_effect=lambda: clock[0]):
+                        options = {"deadline": deadline, "cancelled": lambda: completed_last_read and cancel_after}
+                        if cancel_after:
+                            with self.assertRaises(inventory.InspectionCancelled):
+                                inventory.observe_lineage(self.project, record, request, **options)
+                        else:
+                            result = inventory.observe_lineage(self.project, record, request, **options)
+                            self.assertEqual(result["status"], "observed" if outcome == "unchanged" else "changed", result)
+                            self.assertEqual(result["integration"]["source_commit"], request["integration"]["source_commit"])
+                            if outcome == "unchanged":
+                                self.assertIs(result["patch_equivalence"]["equal"], True)
+                                self.assertIs(result["retention"]["head_in_ref"], True)
+                            else:
+                                for category, field in (("retention", "head_in_ref"), ("ancestry", "head_in_destination"),
+                                                        ("recovery", "retained"), ("patch_equivalence", "equal")):
+                                    self.assertIsNone(result[category][field])
+                                for field in ("source_matches_head", "source_in_head", "source_in_parents", "destination_parent_count",
+                                              "destination_in_current_destination", "current_destination_matches_claim",
+                                              "current_destination_tree_matches_claim", "current_destination_commit"):
+                                    self.assertIsNone(result["integration"][field], field)
+                                for field in ("source_path_count", "destination_path_count", "destination_base_commit"):
+                                    self.assertIsNone(result["patch_equivalence"][field], field)
+                finally:
+                    self.assertEqual(reads, 2)
+                    self.assertEqual(lineage_snapshot(self.fixture), expected_after)
+                    self.assertEqual(record, original_record)
+                    if drift_path is not None:
+                        if drift_original is None: drift_path.unlink()
+                        else: drift_path.write_bytes(drift_original)
+
+    def test_lineage_integration_invalid_ref_keeps_input_precedence(self):
+        # Catches failure-boundary cancellation masking an already established invalid ref.
+        from devspace import git_inventory as inventory
+        linked, request, record = self.integration_fixture("squash")
+        cancelled = [False]
+        def reject_ref(executable, directory, arguments, deadline, callback):
+            try:
+                return inventory_git(executable, directory, arguments, deadline, callback)
+            except inventory.GitRefused:
+                if "check-ref-format" in arguments: cancelled[0] = True
+                raise
+        inventory_git = inventory._git
+        with patch("devspace.git_inventory._git", side_effect=reject_ref):
+            with self.assertRaises(ValueError):
+                self.lineage_trial({**request, "retained_ref": "refs/heads/bad..name"}, record,
+                                   cancelled=lambda: cancelled[0])
+        self.assertTrue(cancelled[0])
+
+
+    def test_lineage_integration_malformed_delta_stays_unknown(self):
+        # Corrupt real bounded metadata output; graph commands and fixture history stay real.
+        from devspace.git_inventory import _git, InspectionCancelled
+        linked, request, record = self.integration_fixture("squash")
+        def transform(raw, corruption):
+            if corruption == "truncated": return raw[:-1]
+            if corruption == "missing-path": return raw.split(b"\0", 1)[0] + b"\0"
+            if corruption == "duplicate": return raw + raw
+            if corruption == "bad-mode": return raw.replace(b":000000", b":999999", 1)
+            return raw.replace(b":000000", b":100644", 1)
+        for corruption in ("truncated", "missing-path", "duplicate", "bad-mode", "inconsistent-entry"):
+            def malformed(executable, directory, arguments, deadline, cancelled):
+                raw = _git(executable, directory, arguments, deadline, cancelled)
+                return transform(raw, corruption) if "diff-tree" in arguments else raw
+            with patch("devspace.git_inventory._git", side_effect=malformed):
+                result = self.lineage_trial(request, record)
+            self.assertIsNone(result["patch_equivalence"]["equal"], (corruption, result))
+            self.assertIs(result["retention"]["head_in_ref"], True)
+            self.assertIs(result["ancestry"]["head_in_destination"], False)
+        def cancelled_comparison(executable, directory, arguments, deadline, cancelled):
+            if "diff-tree" in arguments: raise InspectionCancelled("cancelled")
+            return _git(executable, directory, arguments, deadline, cancelled)
+        with patch("devspace.git_inventory._git", side_effect=cancelled_comparison), self.assertRaises(InspectionCancelled):
+            self.lineage_trial(request, record)
+
+    def test_lineage_integration_modes_paths_and_128_path_boundary(self):
+        # Catches dropping modes/paths, rename normalization or off-by-one path limits.
+        linked, request, record = self.lineage_fixture(linked_name="delta-paths")
+        base = self.git("rev-parse", "refs/heads/destination").strip().decode()
+        self.git("checkout", "-b", "delta-source", base)
+        self.git("mv", "rename-before.txt", "renamed\nfile.txt")
+        self.git("rm", "staged.txt")
+        (self.project / "dirty.txt").chmod(0o755)
+        for number in range(124): (self.project / ("path-"+str(number))).write_text("same literal bytes\n")
+        self.git("add", ".")
+        self.git("commit", "-m", "128 changes including modes and unusual path")
+        source = self.git("rev-parse", "HEAD").strip().decode()
+        self.git("update-ref", "refs/heads/retained", source)
+        self.git("checkout", "--detach", source, cwd=linked)
+        self.git("checkout", "destination")
+        self.git("merge", "--squash", source)
+        self.git("commit", "-m", "Exact 128 path squash")
+        destination = self.git("rev-parse", "HEAD").strip().decode()
+        claim = {"kind": "squash", "source_base_commit": base, "source_commit": source, "destination_commit": destination}
+        request.update(expected_head=source, integration=claim)
+        record = next(r for r in self.inventory()["worktrees"] if r["path"] == str(linked))
+        exact = self.lineage_trial(request, record)
+        self.assertIs(exact["patch_equivalence"]["equal"], True, exact)
+        self.assertEqual(exact["patch_equivalence"]["source_path_count"], 128)
+        self.assertEqual(exact["patch_equivalence"]["destination_path_count"], 128)
+        # Keep identical file bytes but lose the executable mode in destination.
+        (self.project / "dirty.txt").chmod(0o644)
+        self.git("add", "dirty.txt")
+        self.git("commit", "--amend", "--no-edit")
+        changed = self.git("rev-parse", "HEAD").strip().decode()
+        mismatch = self.lineage_trial({**request, "integration": {**claim, "destination_commit": changed}}, record)
+        self.assertIs(mismatch["patch_equivalence"]["equal"], False, mismatch)
+        # Same number/bytes of entries, with a different changed path.
+        self.git("mv", "path-0", "different-path")
+        (self.project / "dirty.txt").chmod(0o755)
+        self.git("add", ".")
+        self.git("commit", "--amend", "--no-edit")
+        changed = self.git("rev-parse", "HEAD").strip().decode()
+        mismatch = self.lineage_trial({**request, "integration": {**claim, "destination_commit": changed}}, record)
+        self.assertIs(mismatch["patch_equivalence"]["equal"], False, mismatch)
+
+    def test_lineage_integration_sha256_delta(self):
+        # Catches truncated/assumed SHA-1 endpoint or raw-delta handling.
+        from devspace.git_inventory import inventory_git, observe_lineage
+        repo = self.fixture / "sha256-integration"
+        repo.mkdir()
+        init = subprocess.run(["git", "init", "--object-format=sha256", "--initial-branch=fixture-main"],
+                              cwd=repo, env=self.environment, capture_output=True, timeout=10)
+        if init.returncode: self.skipTest("installed Git does not support SHA-256 repository initialization")
+        (repo / "data").write_text("base\n")
+        self.git("add", "data", cwd=repo)
+        self.git("commit", "-m", "Base", cwd=repo)
+        base = self.git("rev-parse", "HEAD", cwd=repo).strip().decode()
+        (repo / "data").write_text("source\n")
+        self.git("commit", "-am", "Source", cwd=repo)
+        source = self.git("rev-parse", "HEAD", cwd=repo).strip().decode()
+        self.git("update-ref", "refs/heads/retained", source, cwd=repo)
+        linked = self.fixture / "sha256-integration-linked"
+        self.git("worktree", "add", "--detach", str(linked), source, cwd=repo)
+        self.git("checkout", "-b", "destination", base, cwd=repo)
+        self.git("cherry-pick", source, cwd=repo)
+        destination = self.git("rev-parse", "HEAD", cwd=repo).strip().decode()
+        request = {"schema_version": 1, "repository": str(repo), "path": str(linked), "expected_head": source,
+                   "retained_ref": "refs/heads/retained", "destination_ref": "refs/heads/destination",
+                   "integration": {"kind": "squash", "source_base_commit": base,
+                                   "source_commit": source, "destination_commit": destination}}
+        with patch.dict(os.environ, self.environment, clear=True):
+            record = next(row for row in inventory_git(repo)["worktrees"] if row["path"] == str(linked))
+        before = lineage_snapshot(self.fixture)
+        result = observe_lineage(repo, record, request, deadline=time.monotonic()+10)
+        self.assertEqual(result["status"], "observed", result)
+        self.assertEqual(result["binding"]["object_format"], "sha256")
+        self.assertEqual(len(result["integration"]["source_commit"]), 64)
+        self.assertIs(result["patch_equivalence"]["equal"], True)
+        self.assertEqual(lineage_snapshot(self.fixture), before)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -155,7 +155,8 @@ def _lineage_text(observation: dict) -> list[str]:
             "Git lineage retention: " + quote(observation["retention"]),
             "Git lineage ancestry: " + quote(observation["ancestry"]),
             "Git lineage recovery: " + quote(observation["recovery"]),
-            "Git lineage comparisons: " + quote({key: observation[key] for key in ("integration", "patch_equivalence")}),
+            "Git lineage integration (historical claim): " + quote(observation["integration"]),
+            "Git lineage patch equivalence: " + quote(observation["patch_equivalence"]),
             "Git lineage limits: " + quote({key: observation[key] for key in
                 ("observed_at", "report_only", "refs_local_only", "remote_freshness", "release", "current_use", "limitations")})]
 

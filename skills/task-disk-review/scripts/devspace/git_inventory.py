@@ -291,7 +291,7 @@ def _check_exclusions(directory: Path, excluded_paths: tuple[Path, ...]) -> None
 def validate_lineage_request(document: dict) -> dict:
     """Validate only the bounded literal input shape; acquire no paths or refs."""
     fields = {"schema_version", "repository", "path", "expected_head", "retained_ref", "destination_ref"}
-    if (not isinstance(document, dict) or set(document) != fields
+    if (not isinstance(document, dict) or set(document) not in (fields, fields | {"integration"})
             or type(document.get("schema_version")) is not int or document["schema_version"] != 1):
         raise ValueError("unsupported Git lineage document")
     for name in ("repository", "path"):
@@ -308,22 +308,163 @@ def validate_lineage_request(document: dict) -> dict:
                 or not value.startswith(("refs/heads/", "refs/remotes/"))
                 or any(c in value for c in ("~", "^", ":", "?", "*", "[", "\\", " ", "\n", "\r", "\t", "@{"))):
             raise ValueError("Git lineage requires bounded literal full refs")
-    return dict(document)
+    if "integration" in document:
+        claim = document["integration"]
+        if not isinstance(claim, dict) or claim.get("kind") not in ("merge", "squash"):
+            raise ValueError("unsupported Git integration claim")
+        endpoints = {"source_commit", "destination_commit"}
+        if claim["kind"] == "squash": endpoints.add("source_base_commit")
+        if set(claim) != endpoints | {"kind"}:
+            raise ValueError("Git integration claim requires exact explicit endpoints")
+        for name in endpoints:
+            value = claim[name]
+            if (not isinstance(value, str) or len(value) not in (40, 64)
+                    or any(c not in "0123456789abcdef" for c in value)):
+                raise ValueError("Git integration requires full lowercase commit identities")
+    return {**document, **({"integration": dict(document["integration"])} if "integration" in document else {})}
 
 
-def _lineage_result(status="not_examined", reason="scope_or_budget_unavailable"):
+def _comparison_results(claim):
+    """Only supplied endpoints and fixed limitations survive an invalid binding."""
+    if claim is None:
+        return {"status": "not_requested"}, {"status": "not_requested"}
+    integration = {"status": "unavailable", "reason": "comparison_not_observed", **claim,
+                   "claim_authenticity": "unverified", "current_content_preservation": "unestablished",
+                   "source_matches_head": None, "source_in_head": None,
+                   "source_in_parents": None, "destination_parent_count": None,
+                   "destination_in_current_destination": None, "current_destination_commit": None,
+                   "current_destination_matches_claim": None, "current_destination_tree_matches_claim": None}
+    if claim["kind"] == "merge":
+        return integration, {"status": "not_requested"}
+    integration["squash_provenance"] = "unverified"
+    return integration, {"status": "unavailable", "reason": "comparison_not_observed",
+                         "method": "exact-tree-entry-delta", "equal": None,
+                         "source_base_commit": claim["source_base_commit"], "source_commit": claim["source_commit"],
+                         "destination_base_commit": None, "destination_commit": claim["destination_commit"],
+                         "source_path_count": None, "destination_path_count": None}
+
+
+def _integration_evidence(claim: dict, binding: dict, *, git: Callable[..., bytes],
+                          repository: Path) -> tuple[dict, dict]:
+    """Compare explicit local commit endpoints, never authenticate historical intent."""
+    integration, comparison = _comparison_results(claim)
+    oid_length = {"sha1": 40, "sha256": 64}.get(binding["object_format"])
+
+    def oid(value):
+        if (oid_length is None or len(value) != oid_length
+                or any(c not in "0123456789abcdef" for c in value)):
+            raise InspectionUnavailable("Git integration object identity unavailable")
+        return value
+
+    def ancestor(first, second):
+        try:
+            git(repository, "merge-base", "--is-ancestor", first, second)
+            return True
+        except GitRefused as error:
+            if error.returncode == 1:
+                return False
+            raise
+
+    def tree(commit):
+        raw = git(repository, "rev-parse", "--verify", commit+"^{tree}")
+        return oid(raw.decode("ascii").removesuffix("\n"))
+
+    def delta(base, tip):
+        raw = git(repository, "diff-tree", "--no-commit-id", "--raw", "-r", "-z",
+                  "--no-renames", "--no-ext-diff", "--no-textconv", "--abbrev="+str(oid_length),
+                  base, tip, "--")
+        if not raw or not raw.endswith(b"\0"):
+            raise InspectionUnavailable("Git integration empty or incomplete delta")
+        fields = raw[:-1].split(b"\0")
+        if len(fields) % 2 or len(fields) > 256:
+            raise InspectionUnavailable("Git integration delta path limit or malformed output")
+        entries, paths = [], set()
+        zero = "0" * oid_length
+        for header, path in zip(fields[::2], fields[1::2]):
+            parts = header.decode("ascii").split(" ")
+            if len(parts) != 5 or not parts[0].startswith(":"):
+                raise InspectionUnavailable("Git integration delta format unsupported")
+            old_mode, new_mode = parts[0][1:], parts[1]
+            old_oid, new_oid = oid(parts[2]), oid(parts[3])
+            status = parts[4]
+            modes = {"000000", "100644", "100755", "120000"}
+            if (old_mode not in modes or new_mode not in modes or status not in {"A", "D", "M", "T"}
+                    or (old_mode == "000000") != (old_oid == zero)
+                    or (new_mode == "000000") != (new_oid == zero)
+                    or (old_oid == zero) != (status == "A")
+                    or (new_oid == zero) != (status == "D")
+                    or (old_mode, old_oid) == (new_mode, new_oid)
+                    or not path or path.startswith(b"/") or any(part in (b"", b".", b"..") for part in path.split(b"/"))
+                    or path in paths):
+                raise InspectionUnavailable("Git integration delta entry unsupported")
+            paths.add(path)
+            entries.append((old_mode, new_mode, old_oid, new_oid, path))
+        return sorted(entries, key=lambda entry: entry[4])
+
+    try:
+        for name in ("source_commit", "destination_commit", "source_base_commit"):
+            if name in claim:
+                endpoint = oid(claim[name])
+                if git(repository, "cat-file", "-t", endpoint) != b"commit\n":
+                    raise InspectionUnavailable("Git integration endpoint is not a commit")
+        source, destination = claim["source_commit"], claim["destination_commit"]
+        head, current_destination = binding["head"], binding["destination_oid"]
+        integration.update(source_matches_head=source == head, source_in_head=ancestor(source, head),
+                           destination_in_current_destination=ancestor(destination, current_destination),
+                           current_destination_commit=current_destination,
+                           current_destination_matches_claim=current_destination == destination,
+                           current_destination_tree_matches_claim=tree(current_destination) == tree(destination))
+        raw = git(repository, "rev-list", "--parents", "--max-count=1", destination, "--")
+        if not raw.endswith(b"\n") or raw.count(b"\n") != 1:
+            raise InspectionUnavailable("Git integration parent format unsupported")
+        lineage = [oid(value) for value in raw[:-1].decode("ascii").split(" ")]
+        if not lineage or lineage[0] != destination:
+            raise InspectionUnavailable("Git integration parent binding unavailable")
+        parents = lineage[1:]
+        integration["destination_parent_count"] = len(parents)
+        if claim["kind"] == "merge":
+            if len(parents) != 2:
+                raise InspectionUnavailable("Git integration requires exactly two parents")
+            integration["source_in_parents"] = [ancestor(source, parent) for parent in parents]
+            if not integration["source_in_head"] or not any(integration["source_in_parents"]):
+                raise InspectionUnavailable("Git integration source relation unresolved")
+        else:
+            if len(parents) != 1 or not integration["source_in_head"]:
+                raise InspectionUnavailable("Git squash topology or source relation unsupported")
+            if not ancestor(claim["source_base_commit"], source):
+                raise InspectionUnavailable("Git squash base is not ancestral to source")
+            first, second = delta(claim["source_base_commit"], source), delta(parents[0], destination)
+            comparison.update(status="observed", reason="exact_delta_observed", equal=first == second,
+                              destination_base_commit=parents[0], source_path_count=len(first), destination_path_count=len(second))
+        integration.update(status="observed", reason="local_graph_observed")
+    except InspectionCancelled:
+        raise
+    except (InspectionUnavailable, UnicodeError, ValueError):
+        integration["reason"] = "comparison_unavailable"
+    return integration, comparison
+
+
+def _lineage_result(status="not_examined", reason="scope_or_budget_unavailable", *, claim=None):
     from datetime import datetime, timezone
-    return {"status": status, "reason": reason,
+    integration, comparison = _comparison_results(claim)
+    result = {"status": status, "reason": reason,
             "observed_at": datetime.now(timezone.utc).isoformat(), "binding": {},
             "retention": {"head_in_ref": None}, "ancestry": {"head_in_destination": None},
             "recovery": {"retained": None, "root_count": None, "coverage": "unknown",
                          "reason": "recovery_not_observed", "content_availability": "not_certified"},
-            "integration": {"status": "not_requested"}, "patch_equivalence": {"status": "not_requested"},
+            "integration": integration, "patch_equivalence": comparison,
             "report_only": True, "refs_local_only": True, "remote_freshness": "unknown",
             "release": "not_established", "current_use": "unknown",
             "limitations": ["Before/after binding checks are not an atomic snapshot.",
                             "Recovery reachability does not certify all content availability.",
                             "Primary/private administration recovery is unsupported; consumers and release need scoped evidence."]}
+    if claim is not None:
+        result["limitations"].extend([
+            "Historical endpoints are caller claims; graph comparisons do not authenticate intent or provenance.",
+            "Exact tree-entry deltas are not patch-ID similarity, release, semantic preservation or blob recoverability.",
+            "Squash provenance needs an independently attributable scoped record binding repository/source/base/destination.",
+            "Comparisons accept at most 128 changed paths per side; command output is capped at 1 MiB; Git traversal is not path bounded."])
+    return result
 
 
 def observe_lineage(repository: Path, record: dict, request: dict, *, exclusions: tuple[str, ...] = (),
@@ -335,7 +476,7 @@ def observe_lineage(repository: Path, record: dict, request: dict, *, exclusions
     import stat
 
     request = validate_lineage_request(request)
-    result = _lineage_result()
+    result = _lineage_result(claim=request.get("integration"))
     repository, target = Path(repository), Path(request["path"])
     excluded = tuple(Path(os.path.abspath(path)) for path in exclusions)
     boundaries = [repository, target]
@@ -563,6 +704,10 @@ def observe_lineage(repository: Path, record: dict, request: dict, *, exclusions
         except (ValueError, OSError, InspectionUnavailable):
             pass
 
+        if "integration" in request and complete:
+            result["integration"], result["patch_equivalence"] = _integration_evidence(
+                request["integration"], result["binding"], git=git, repository=repository)
+
         # All derived observations depend on the final binding and graph policy.
         final_paths = [paths(directory) for directory in (repository, target)]
         current_executable = shutil.which("git")
@@ -579,7 +724,15 @@ def observe_lineage(repository: Path, record: dict, request: dict, *, exclusions
             guard(admin)
             if _administration_state(admin) != administration_state:
                 raise InspectionUnavailable("Git lineage administration changed")
-        result.update(status="observed" if all(value is not None for value in
+        # Final metadata reads can themselves consume the remaining budget or cancellation.
+        # This completion decision is pure: no further path/exclusion acquisition.
+        if cancelled is not None and cancelled():
+            raise InspectionCancelled("Git lineage cancelled; remaining state unknown")
+        if time.monotonic() >= deadline:
+            raise InspectionUnavailable("Git lineage time limit; remaining state unknown")
+        comparisons_complete = all(result[key]["status"] in ("observed", "not_requested")
+                                   for key in ("integration", "patch_equivalence"))
+        result.update(status="observed" if comparisons_complete and all(value is not None for value in
                       (result["retention"]["head_in_ref"], result["ancestry"]["head_in_destination"],
                        result["recovery"]["retained"])) else "partial", reason="local_observation")
         return result
@@ -588,9 +741,12 @@ def observe_lineage(repository: Path, record: dict, request: dict, *, exclusions
     except (InspectionUnavailable, OSError, RuntimeError, ValueError):
         if invalid_ref:
             raise
+        if cancelled is not None and cancelled():
+            raise InspectionCancelled("Git lineage cancelled; remaining state unknown")
         result["retention"]["head_in_ref"] = None
         result["ancestry"]["head_in_destination"] = None
         result["recovery"]["retained"] = None
+        result["integration"], result["patch_equivalence"] = _comparison_results(request.get("integration"))
         result.update(status="changed" if binding_started else "unavailable",
                       reason="binding_or_policy_unavailable" if binding_started else "inspection_unavailable")
         return result

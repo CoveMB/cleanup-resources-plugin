@@ -85,12 +85,12 @@ class PackageInvocation(unittest.TestCase):
 
 
 
-    def test_git_lineage_extracted_cli_contract(self):
+    def test_git_lineage_integration_extracted_cli_contract(self):
         import test_git_inventory
         fixture = test_git_inventory.GitInventory()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
-        linked, request, record = fixture.lineage_fixture(linked_name="linked")
+        linked, request, record = fixture.integration_fixture("squash")
         base = fixture.fixture
         archive = base / "plugin.zip"
         build = subprocess.run([sys.executable, "-B", str(ROOT / "scripts/build_package.py"), str(archive)],
@@ -136,11 +136,36 @@ class PackageInvocation(unittest.TestCase):
             self.assertTrue(observed.stdout, observed.stderr)
             report = json.loads(observed.stdout)
             self.assertEqual(report["git_lineage"]["status"], "observed", report["git_lineage"])
+            self.assertIs(report["git_lineage"]["patch_equivalence"]["equal"], True)
+            self.assertEqual(report["git_lineage"]["patch_equivalence"]["method"], "exact-tree-entry-delta")
+            self.assertIs(report["git_lineage"]["ancestry"]["head_in_destination"], False)
+            self.assertEqual(report["git_lineage"]["integration"]["squash_provenance"], "unverified")
+            self.assertEqual(report["git_lineage"]["integration"]["current_content_preservation"], "unestablished")
             for key in ("candidates", "scope_roots", "plan", "size"):
                 self.assertEqual(report[key], json.loads(control.stdout)[key], key)
             text = invoke(*scope, "--git-lineage", str(request_file))
             self.assertIn("Git lineage", text.stdout)
             self.assertIn("not_established", text.stdout)
+            self.assertIn('"method": "exact-tree-entry-delta"', text.stdout)
+            self.assertIn('"squash_provenance": "unverified"', text.stdout)
+            self.assertIn('"head_in_destination": false', text.stdout)
+            # A skipped extracted-CLI observation still truthfully retains its requested claim.
+            request_file.write_text(json.dumps({**request, "path": str(base / "unmatched-checkout")}))
+            skipped = invoke(*scope, "--assessment", str(assessment_file), "--git-lineage", str(request_file), "--json")
+            self.assertEqual(skipped.returncode, 2, skipped.stderr)
+            skipped_report = json.loads(skipped.stdout)
+            lineage = skipped_report["git_lineage"]
+            self.assertEqual(lineage["status"], "not_examined")
+            self.assertEqual(lineage["integration"]["status"], "unavailable")
+            self.assertEqual(lineage["integration"]["source_commit"], request["integration"]["source_commit"])
+            self.assertEqual(lineage["integration"]["squash_provenance"], "unverified")
+            self.assertIsNone(lineage["patch_equivalence"]["equal"])
+            skipped_text = invoke(*scope, "--git-lineage", str(request_file))
+            self.assertIn('"squash_provenance": "unverified"', skipped_text.stdout)
+            self.assertIn('"source_commit": "'+request["integration"]["source_commit"]+'"', skipped_text.stdout)
+            for key in ("candidates", "scope_roots", "plan", "size"):
+                self.assertEqual(skipped_report[key], json.loads(control.stdout)[key], key)
+            request_file.write_text(json.dumps(request))
         refused = invoke("--task", str(linked), "--git-lineage", str(request_file), "--json")
         self.assertEqual(refused.returncode, 1)
         self.assertEqual(refused.stdout, "")
