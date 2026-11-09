@@ -8,7 +8,7 @@ The [canonical design](../../superpowers/specs/2026-10-19-context-aware-resource
 
 Two easily lost requirements remain explicit: bind holds/exclusions before first discovery, and bound total native metadata before acquisition, including pinned entries. Post-fetch truncation is not a privacy bound.
 
-Future exact-file, generated-output, container and pnpm contracts remain proposals. Earlier reviews of other branch candidates do not establish that those features exist in this tree.
+I04 exact-file cleanup is implemented with the source/component evidence below; generated-output-without-baseline, positive assessed-container and pnpm extensions remain undelivered. Earlier reviews of other branch candidates do not establish later features or transfer acceptance.
 
 ## I02 source and I03 plan review gates
 
@@ -30,7 +30,13 @@ All three distinct sequential independent source scopes approved frozen tree `f5
 
 The confirmed red logs retain invalid spy-target failures in all 84 mixed-batch subtrials in each log; those were harness failures, not policy-reachability evidence. Final corrected guard tests and the separate clean packaged-contract red supply the qualified current evidence. The original logs/report remain preserved.
 
-Exactly two original finite model observations were accepted, one helper call each with no replacement. Both found the useful supported directory and preserved containers; the correction's universal refusal reason was documentation/source attribution, with zero model Docker rows/native calls. No quality advantage was established. Integrity/reference identities remained intact, but these finite checks do not prove exhaustive access safety or native/installed/practical acceptance. Broader I06–I08 and human acceptance remain open; I04/I05 are the next implementation increments.
+Exactly two original finite model observations were accepted, one helper call each with no replacement. Both found the useful supported directory and preserved containers; the correction's universal refusal reason was documentation/source attribution, with zero model Docker rows/native calls. No quality advantage was established. Integrity/reference identities remained intact, but these finite checks do not prove exhaustive access safety or native/installed/practical acceptance. Broader I06–I08 and human acceptance remain open; I04 status is reconciled below and I05 is conditional private preparation only.
+
+## I04 implementation and repaired gates
+
+The complete v5 operation is published as [`9fd6ae3`](https://github.com/CoveMB/cleanup-resources-plugin/commit/9fd6ae387670f57151ac70143b8eabdaa1f06a8e) in [PR 18](https://github.com/CoveMB/cleanup-resources-plugin/pull/18). All three initial source reports were collected before repair. The real mixed-provider cancellation defect and mandatory preservation/assertion gaps were repaired; all three fresh sequential scoped re-reviews approved the same frozen repaired subject. The matching hosted matrix passed all four 319-test jobs, with all 22 native exact-file cases actually passing on both Macs. The [I04 QA record](qa-plan.md#i04-evidence-reconciliation--9-november-2026) owns exact runtime/package/checkout subjects and retained initial Mac fixture failures, local limitations and earlier results.
+
+The original investigator pair remains permanently interrupted/incomplete/unqualified. A single separately assigned renewal completed both in-window finals, with two reserved/actual helper starts per arm and no continuation, stop or replacement. Independent evaluation supports all 64 semantic control mappings in available outputs, including one baseline directory positive and two revised directory/file positives with protected/unknown preservation. The controller accepted I04 for I05 dependency continuation with explicit evidence limits; no causal reasoning improvement or exhaustive access/cost trace is established. The controller's separate dispatch request/return UTC samples were omitted despite an available clock; known activation, repeated states and completed finals establish budget bounds, not a complete performance trace. I05 has conditional private preparation only, with no initial plan reviews, public plan, code or models. Next reconcile and freeze its complete proposal and minimum raw fixture/protocol inputs against accepted I04 for its own three distinct fresh sequential initial plan reviews. I06/I07 prerequisites, installed/desktop/combined evidence, practical trials and human acceptance remain open.
 
 ## Comparison gap
 
