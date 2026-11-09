@@ -19,6 +19,7 @@ MEMBERS = (
     "skills/task-disk-review/scripts/devspace/plans.py",
     "skills/task-disk-review/scripts/devspace/global_inventory.py",
     "skills/task-disk-review/scripts/devspace/cleanup.py",
+    "skills/task-disk-review/scripts/devspace/exact_file.py",
 )
 
 

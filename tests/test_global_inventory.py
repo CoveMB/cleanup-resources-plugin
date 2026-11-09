@@ -474,6 +474,22 @@ class GlobalCoverage(unittest.TestCase):
 
 
 class GlobalAssessment(unittest.TestCase):
+    def test_v5_file_unexamined_writers_preserve_operation_and_identity(self):
+        from test_exact_file import ExactFileFixture
+        fixture = ExactFileFixture(); fixture.setUp(); self.addCleanup(fixture.doCleanups)
+        assessment = copy.deepcopy(fixture.assessment); assessment['candidates'][0]['path'] = str(fixture.target)
+        earlier = fixture.base / 'earlier'; earlier.mkdir(); (earlier / 'a').write_bytes(b'a'); (earlier / 'b').write_bytes(b'b')
+        for config, options in [({'schema_version': 1, 'roots': []}, {}),
+                                ({'schema_version': 1, 'roots': [str(fixture.project)], 'host_identity': 'different'}, {}),
+                                ({'schema_version': 1, 'roots': [str(earlier), str(fixture.project)]}, {'max_entries': 1}),
+                                ({'schema_version': 1, 'roots': [str(fixture.project)], 'holds': [str(fixture.target)]}, {})]:
+            report = plans.review_scope(config, mode='global', assessment=assessment, **options)
+            row = next(r for r in report['candidates'] if r.get('operation') == 'file-remove')
+            self.assertNotEqual(row['assessment'], 'Eligible')
+            self.assertEqual(row['id'], plans.digest({'operation': 'file-remove', 'path': str(fixture.target)})[:16])
+            self.assertEqual(report['plan']['schema_version'], 5)
+            with self.assertRaises(ValueError): plans.validate_selection(report['plan'], [row['id']])
+
     def test_shared_eligible_hold_and_frozen_selection_contract(self):
         fixture = test_plans.AssessedPlans(methodName="test_source_journey_and_equivalent_unregistered_assessment_preserve_bytes")
         fixture.setUp()

@@ -249,11 +249,12 @@ def review_global(config, *, assessment=None, manifest=None, holds=(), exclusion
     for index, specification in enumerate(assessment["candidates"]):
         if index not in assigned:
             path = os.path.abspath(specification["path"])
-            identifier = plans.hashlib.sha256(os.fsencode(path)).hexdigest()[:16]
+            file = assessment["schema_version"] == 5 and specification.get("operation") == "file-remove"
+            identifier = plans.digest({"operation": "file-remove", "path": path})[:16] if file else plans.hashlib.sha256(os.fsencode(path)).hexdigest()[:16]
             if identifier in seen_candidates:
                 continue
             seen_candidates.add(identifier)
-            report["candidates"].append({"id": identifier, "path": path,
+            report["candidates"].append({**({"operation": "file-remove"} if file else {}), "id": identifier, "path": path,
                 "host": report["host"], "category": specification.get("category", "unknown"), "project": None,
                 "assessment": "Keep", "reason": "outside examined configured roots; never selected",
                 "effect": "report only; no removal authorized"})

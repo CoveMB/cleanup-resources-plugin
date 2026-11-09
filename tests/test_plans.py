@@ -232,7 +232,7 @@ class AssessedPlans(unittest.TestCase):
     def test_diagnostic_changes_preserve_versioned_selection(self):
         before = self.bytes()
         owner = self.owner()
-        for version in (1, 2, 3, 4):
+        for version in (1, 2, 3, 4, 5):
             with self.subTest(version=version):
                 assessment = copy.deepcopy(self.assessment)
                 assessment["schema_version"] = version
@@ -661,7 +661,7 @@ class AssessedPlans(unittest.TestCase):
         config = {"schema_version": 1, "roots": [str(self.project), str(fixture.project)]}
         from devspace import docker_cleanup, npm_cache
         import base64
-        for version in (1, 2, 3, 4):
+        for version in (1, 2, 3, 4, 5):
             assessment = copy.deepcopy(self.assessment)
             assessment["schema_version"] = version
             for row in assessment["candidates"]:
@@ -769,69 +769,92 @@ class AssessedPlans(unittest.TestCase):
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         linked, request, record = fixture.integration_fixture("squash")
-        config = {"schema_version": 1, "roots": [str(self.project), str(fixture.project)]}
-        assessment = copy.deepcopy(self.assessment)
-        for row in assessment["candidates"]: row["path"] = str(self.project / row["path"])
-        control = self.owner().review_scope(config, mode="global", assessment=assessment)
-        self.assertTrue(any(row["assessment"] == "Eligible" for row in control["candidates"]))
-        before = (test_git_inventory.lineage_snapshot(fixture.fixture), test_git_inventory.lineage_snapshot(self.base))
-        failures = ("unmatched", "budget", "scope", "host", "already-cancelled", "cancelled", "interrupt", "unavailable")
-        for kind in ("squash", "merge", "absent"):
-            trial = copy.deepcopy(request)
-            if kind == "merge":
-                trial["integration"]["kind"] = "merge"
-                trial["integration"].pop("source_base_commit")
-            elif kind == "absent": trial.pop("integration")
-            for failure in failures:
-                ordinary = copy.deepcopy(control)
-                selected = copy.deepcopy(config)
-                supplied = copy.deepcopy(trial)
-                if failure == "unmatched": supplied["path"] = str(fixture.fixture / "unmatched")
-                if failure == "scope": ordinary["invalid_scope"] = True
-                if failure == "host": selected["host_identity"] = "different-host"
-                if failure == "already-cancelled": ordinary["cancelled"] = True
-                error = {"cancelled": inventory.InspectionCancelled("cancelled"), "interrupt": KeyboardInterrupt(),
-                         "unavailable": inventory.InspectionUnavailable("unavailable")}.get(failure)
-                skipped = error is None
-                with self.subTest(kind=kind, failure=failure), \
-                        patch("devspace.plans._review_docker_scope", return_value=ordinary), \
-                        patch("devspace.plans.time.monotonic", side_effect=[100, 120] if failure == "budget" else lambda: 100), \
-                        patch("devspace.git_inventory.observe_lineage", side_effect=error or AssertionError("skipped observer acquired")) as observer, \
-                        patch("devspace.git_inventory._git", side_effect=AssertionError("unexpected native acquisition")), \
-                        patch("devspace.git_worktree._metadata_file", side_effect=AssertionError("unexpected metadata acquisition")), \
-                        patch("devspace.git_worktree._administration_state", side_effect=AssertionError("unexpected admin acquisition")), \
-                        patch("devspace.plans._open_parent", side_effect=AssertionError("unexpected descriptor acquisition")):
-                    report = self.owner().review_scope(selected, mode="global", assessment=assessment, git_lineage=supplied)
-                self.assertEqual(observer.call_count, 0 if skipped else 1)
-                self.assertEqual(report["cancelled"], failure in ("already-cancelled", "cancelled", "interrupt"))
-                lineage = report["git_lineage"]
-                self.assertEqual(lineage["status"], "unavailable" if failure == "unavailable" else "not_examined")
-                if kind == "absent":
-                    self.assertEqual(lineage["integration"], {"status": "not_requested"})
-                    self.assertEqual(lineage["patch_equivalence"], {"status": "not_requested"})
-                else:
-                    evidence = lineage["integration"]
-                    self.assertEqual(evidence["status"], "unavailable")
-                    for field, value in trial["integration"].items(): self.assertEqual(evidence[field], value)
-                    self.assertEqual(evidence["claim_authenticity"], "unverified")
-                    self.assertEqual(evidence["current_content_preservation"], "unestablished")
-                    for field in ("source_matches_head", "source_in_head", "source_in_parents", "destination_parent_count",
-                                  "destination_in_current_destination", "current_destination_matches_claim",
-                                  "current_destination_tree_matches_claim", "current_destination_commit"):
-                        self.assertIsNone(evidence[field], field)
-                    if kind == "squash":
-                        self.assertEqual(evidence["squash_provenance"], "unverified")
-                        self.assertEqual(lineage["patch_equivalence"]["status"], "unavailable")
-                        for field in ("equal", "source_path_count", "destination_path_count", "destination_base_commit"):
-                            self.assertIsNone(lineage["patch_equivalence"][field], field)
-                        self.assertIn('"squash_provenance": "unverified"', render_text(report))
-                    else: self.assertEqual(lineage["patch_equivalence"], {"status": "not_requested"})
-                    self.assertTrue(any("authenticate" in limitation for limitation in lineage["limitations"]))
-                self.assertEqual(lineage["binding"], {})
-                self.assertFalse(report["coverage"]["complete"])
-                for key in ("candidates", "scope_roots", "plan", "size"):
-                    self.assertEqual(report[key], control[key], key)
-        self.assertEqual((test_git_inventory.lineage_snapshot(fixture.fixture), test_git_inventory.lineage_snapshot(self.base)), before)
+        # Reuse the accepted claim-failure matrix and actual Git fixture for
+        # both contracts. The v5 arm has a real independent exact-file candidate.
+        from test_exact_file import ExactFileFixture
+        file_fixture = ExactFileFixture(); file_fixture.setUp(); self.addCleanup(file_fixture.doCleanups)
+        for version in (1, 5):
+            config = {"schema_version": 1, "roots": [str(self.project), str(fixture.project)]}
+            assessment = copy.deepcopy(self.assessment)
+            for row in assessment["candidates"]: row["path"] = str(self.project / row["path"])
+            if version == 5:
+                assessment = copy.deepcopy(file_fixture.assessment)
+                assessment["candidates"][0]["path"] = str(file_fixture.target)
+                config["roots"].append(str(file_fixture.project))
+            control = self.owner().review_scope(config, mode="global", assessment=assessment)
+            self.assertTrue(any(row["assessment"] == "Eligible" for row in control["candidates"]))
+            if version == 5:
+                self.assertTrue(any(row.get("operation") == "file-remove" and row["assessment"] == "Eligible" for row in control["candidates"]))
+            positive = self.owner().review_scope(config, mode="global", assessment=assessment, git_lineage=request)
+            self.assertEqual(positive["git_lineage"]["status"], "observed")
+            for key in ("candidates", "scope_roots", "plan", "size"):
+                self.assertEqual(positive[key], control[key], key)
+            file_before = test_git_inventory.lineage_snapshot(file_fixture.base)
+            before = (test_git_inventory.lineage_snapshot(fixture.fixture), test_git_inventory.lineage_snapshot(self.base))
+            failures = ("unmatched", "budget", "scope", "host", "already-cancelled", "cancelled", "interrupt", "unavailable")
+            for kind in ("squash", "merge", "absent"):
+                trial = copy.deepcopy(request)
+                if kind == "merge":
+                    trial["integration"]["kind"] = "merge"
+                    trial["integration"].pop("source_base_commit")
+                elif kind == "absent": trial.pop("integration")
+                for failure in failures:
+                    ordinary = copy.deepcopy(control)
+                    selected = copy.deepcopy(config)
+                    supplied = copy.deepcopy(trial)
+                    if failure == "unmatched": supplied["path"] = str(fixture.fixture / "unmatched")
+                    if failure == "scope": ordinary["invalid_scope"] = True
+                    if failure == "host": selected["host_identity"] = "different-host"
+                    if failure == "already-cancelled": ordinary["cancelled"] = True
+                    error = {"cancelled": inventory.InspectionCancelled("cancelled"), "interrupt": KeyboardInterrupt(),
+                             "unavailable": inventory.InspectionUnavailable("unavailable")}.get(failure)
+                    skipped = error is None
+                    with self.subTest(version=version, kind=kind, failure=failure), \
+                            patch("devspace.plans._review_docker_scope", return_value=ordinary), \
+                            patch("devspace.plans.time.monotonic", side_effect=[100, 120] if failure == "budget" else lambda: 100), \
+                            patch("devspace.git_inventory.observe_lineage", side_effect=error or AssertionError("skipped observer acquired")) as observer, \
+                            patch("devspace.git_inventory._git", side_effect=AssertionError("unexpected native acquisition")), \
+                            patch("devspace.git_worktree._metadata_file", side_effect=AssertionError("unexpected metadata acquisition")), \
+                            patch("devspace.git_worktree._administration_state", side_effect=AssertionError("unexpected admin acquisition")), \
+                            patch("devspace.plans._open_parent", side_effect=AssertionError("unexpected descriptor acquisition")), \
+                            patch("devspace.exact_file.review_file", side_effect=AssertionError("unexpected advisory file payload acquisition")), \
+                            patch("devspace.npm_cache.inspect", side_effect=AssertionError("unexpected advisory cache acquisition")), \
+                            patch("devspace.docker_cleanup.LocalDocker", side_effect=AssertionError("unexpected advisory provider acquisition")):
+                        report = self.owner().review_scope(selected, mode="global", assessment=assessment, git_lineage=supplied)
+                    self.assertEqual(observer.call_count, 0 if skipped else 1)
+                    self.assertEqual(report["cancelled"], failure in ("already-cancelled", "cancelled", "interrupt"))
+                    lineage = report["git_lineage"]
+                    self.assertEqual(lineage["status"], "unavailable" if failure == "unavailable" else "not_examined")
+                    if kind == "absent":
+                        self.assertEqual(lineage["integration"], {"status": "not_requested"})
+                        self.assertEqual(lineage["patch_equivalence"], {"status": "not_requested"})
+                    else:
+                        evidence = lineage["integration"]
+                        self.assertEqual(evidence["status"], "unavailable")
+                        for field, value in trial["integration"].items(): self.assertEqual(evidence[field], value)
+                        self.assertEqual(evidence["claim_authenticity"], "unverified")
+                        self.assertEqual(evidence["current_content_preservation"], "unestablished")
+                        for field in ("source_matches_head", "source_in_head", "source_in_parents", "destination_parent_count",
+                                      "destination_in_current_destination", "current_destination_matches_claim",
+                                      "current_destination_tree_matches_claim", "current_destination_commit"):
+                            self.assertIsNone(evidence[field], field)
+                        if kind == "squash":
+                            self.assertEqual(evidence["squash_provenance"], "unverified")
+                            self.assertEqual(lineage["patch_equivalence"]["status"], "unavailable")
+                            for field in ("equal", "source_path_count", "destination_path_count", "destination_base_commit"):
+                                self.assertIsNone(lineage["patch_equivalence"][field], field)
+                            self.assertIn('"squash_provenance": "unverified"', render_text(report))
+                        else: self.assertEqual(lineage["patch_equivalence"], {"status": "not_requested"})
+                        self.assertTrue(any("authenticate" in limitation for limitation in lineage["limitations"]))
+                    expected = inventory._lineage_result(claim=supplied.get("integration"))
+                    self.assertEqual(lineage["limitations"], expected["limitations"])
+                    self.assertEqual(lineage["binding"], {})
+                    self.assertFalse(report["coverage"]["complete"])
+                    for key in ("candidates", "scope_roots", "plan", "size"):
+                        self.assertEqual(report[key], control[key], key)
+            self.assertEqual((test_git_inventory.lineage_snapshot(fixture.fixture), test_git_inventory.lineage_snapshot(self.base)), before)
+
+            self.assertEqual(test_git_inventory.lineage_snapshot(file_fixture.base), file_before)
 
     def test_git_lineage_last_administration_read_preserves_cancellation(self):
         # Catches final drift/read-failure returning incomplete instead of cancelled.
