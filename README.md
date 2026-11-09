@@ -280,7 +280,7 @@ Ordinary generated/temp outputs, including unregistered resources, use the exist
 
 Assessment JSON has `schema_version: 1`, a `references` dictionary and a `candidates` list. For a requested saved assessment or cleanup plan, the agent prepares it from the task investigation above and relevant existing records; users need no form or technical attestation. Context notes are attributed interpretation, never an independent content baseline. Relevant native history follows the skill's bounded investigation procedure; the Python helper has no history loader and private transcript/database access remains unsupported.
 
-References map IDs to `{"path":"/selected/record","sha256":"actual-64-hex-digest"}`. Paths are selected absolute regular files outside targets. One candidate's shape is illustrated below; placeholders are not evidence:
+References map IDs to `{"path":"/selected/record","sha256":"actual-64-hex-digest"}`. Paths are selected absolute regular files outside targets. Finalize referenced notes and restrictive permissions before hashing and helper review/freeze, then leave bound references unchanged. Even same-mode `chmod` can change `ctime` and invalidate their saved identities; regenerate dependent review/plan data after any bound input changes before a reusable handoff. One candidate's shape is illustrated below; placeholders are not evidence:
 
 ```json
 {
