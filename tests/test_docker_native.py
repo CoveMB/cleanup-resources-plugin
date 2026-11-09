@@ -85,11 +85,15 @@ class NativeDockerCleanup(unittest.TestCase):
             resource["builder"] = self.builder
         elif labelled:
             resource["ownership_label"] = {"key": "fixture.owner", "value": self.owner}
-        native = docker_cleanup.inspect(resource, operation, timeout=30)
-        key = str(len(self.references))
-        expected = self.base / (key + "-expected.json")
-        expected.write_text(json.dumps({"schema_version": 1, "native_digest": plans.digest(native)}))
-        self.reference(key, expected)
+        # Container review refuses before inspection. Its ordinary contextual
+        # reference is not presented as a new native observation/baseline.
+        key = "decision"
+        if operation != "docker-container-remove":
+            native = docker_cleanup.inspect(resource, operation, timeout=30)
+            key = str(len(self.references))
+            expected = self.base / (key + "-expected.json")
+            expected.write_text(json.dumps({"schema_version": 1, "native_digest": plans.digest(native)}))
+            self.reference(key, expected)
         return {"operation": operation, "docker": resource, "category": "synthetic-native", "purpose": "released synthetic fixture",
                 "content": {"method": "native-inspection", "reference": key, "basis": ["decision"]},
                 "recovery": {"kind": "accepted-loss", "basis": ["decision"]},
@@ -104,7 +108,11 @@ class NativeDockerCleanup(unittest.TestCase):
         self.plan_path = self.base / "plan.json"; plans.write_plan(self.plan_path, self.plan)
         self.assessment_path = self.base / "assessment.json"; self.assessment_path.write_text(json.dumps(self.assessment))
         self.ids = [row["id"] for row in report["candidates"] if row["assessment"] == "Eligible"]
-        self.assertEqual(len(self.ids), len(specifications), report["candidates"])
+        self.assertEqual(len(self.ids), sum(spec["operation"] != "docker-container-remove" for spec in specifications), report["candidates"])
+        self.container_rows = [row for row in report["candidates"] if row.get("operation") == "docker-container-remove"]
+        for row in self.container_rows:
+            self.assertEqual((row["assessment"], row["reason"]), ("Unavailable", docker_cleanup.CONTAINER_REMOVAL_UNAVAILABLE_REASON))
+            self.assertNotIn("native", row); self.assertNotIn("observation", row)
 
     def apply(self):
         with patch.object(cleanup, "_state_path", return_value=self.base / "private-state"), patch.object(cleanup, "_confirm", return_value=True):
@@ -119,7 +127,7 @@ class NativeDockerCleanup(unittest.TestCase):
         (self.base / "reconciliation.json").write_text(json.dumps(result, indent=2))
         return result
 
-    def test_mixed_directory_container_image_parent_and_cache_effects(self):
+    def test_mixed_directory_image_parent_cache_effects_preserve_all_containers(self):
         parent = self.image("parent")
         selected_container = self.container(parent, "selected")
         control = self.container(parent, "untouched")
@@ -156,19 +164,20 @@ class NativeDockerCleanup(unittest.TestCase):
         result = self.apply(); self.assertEqual(result["outcome"], "completed", result)
         after = docker_cleanup.LocalDocker(self.endpoint, 30)
         self.assertEqual(set(before_images) - set(after.listed_ids("image")), {child})
-        self.assertEqual(set(before_containers) - set(after.listed_ids("container")), {selected_container})
+        self.assertEqual(set(before_containers), set(after.listed_ids("container")))
         self.assertEqual(after.cache(self.builder), [row for row in cache if row["id"] != selected_cache])
         self.assertFalse(directory.exists()); self.assertIn(parent, after.listed_ids("image")); self.assertIn(control, after.listed_ids("container"))
 
     def test_native_refusal_after_first_success_stops_and_reconciles(self):
         parent = self.image("parent")
-        first, later = self.container(parent, "first"), self.container(parent, "later")
+        control = self.container(parent, "untouched")
+        first, later = self.image("first"), self.image("later")
         image = self.image("refused")
-        self.freeze([self.specification("docker-container-remove", first), self.specification("docker-image-remove", image),
-                     self.specification("docker-container-remove", later)])
+        self.freeze([self.specification("docker-image-remove", first), self.specification("docker-image-remove", image),
+                     self.specification("docker-image-remove", later)])
         real_run = subprocess.run
         def inject_conflict(command, **options):
-            if "image" in command and "rm" in command:
+            if "image" in command and "rm" in command and image in command:
                 tagged = real_run(["docker", "--host", self.endpoint, "image", "tag", image, self.owner + "/retained-conflict:fixture"],
                                   env=self.environment, capture_output=True, timeout=30)
                 self.assertEqual(tagged.returncode, 0)
@@ -181,18 +190,20 @@ class NativeDockerCleanup(unittest.TestCase):
         observed = self.reconcile()
         self.assertEqual([row["outcome"] for row in observed["targets"]],
                          ["absent-provider-resource", "same-provider-id-contents-unverified", "same-provider-id-contents-unverified"])
+        remaining = docker_cleanup.LocalDocker(self.endpoint, 30)
+        self.assertIn(control, remaining.listed_ids("container")); self.assertIn(parent, remaining.listed_ids("image"))
 
-    def test_actual_provider_name_drift_refuses_before_confirmation(self):
+    def test_container_name_drift_stays_unavailable_before_confirmation(self):
         parent = self.image("parent"); container = self.container(parent, "renamed")
         self.freeze([self.specification("docker-container-remove", container)])
         self.docker("container", "rename", container, self.owner + "-external-name-drift")
         with patch.object(cleanup, "_state_path", return_value=self.base / "private-state"), \
                 patch.object(cleanup, "_confirm", side_effect=AssertionError("drift must precede confirmation")):
-            with self.assertRaises(ValueError):
-                cleanup.apply(self.plan_path, self.assessment_path, self.ids)
+            with self.assertRaisesRegex(ValueError, "unknown or ineligible selection"):
+                cleanup.apply(self.plan_path, self.assessment_path, [self.container_rows[0]["id"]])
         self.assertIn(container, docker_cleanup.LocalDocker(self.endpoint, 30).listed_ids("container"))
 
-    def test_unlabelled_existing_resources_qualify_from_specific_evidence(self):
+    def test_unlabelled_container_survives_while_unused_image_qualifies(self):
         parent = self.image("unlabelled-parent", labelled=False)
         container = self.container(parent, "unlabelled", labelled=False)
         image = self.image("unlabelled-unused", labelled=False)
@@ -204,13 +215,14 @@ class NativeDockerCleanup(unittest.TestCase):
         result = self.apply()
         self.assertEqual(result["outcome"], "completed", result)
         after = docker_cleanup.LocalDocker(self.endpoint, 30)
-        self.assertNotIn(container, after.listed_ids("container"))
+        self.assertIn(container, after.listed_ids("container"))
         self.assertNotIn(image, after.listed_ids("image"))
         self.assertIn(parent, after.listed_ids("image"))
 
     def test_timeout_after_actual_native_success_reconciles_without_retry(self):
-        parent = self.image("parent"); container = self.container(parent, "timeout")
-        self.freeze([self.specification("docker-container-remove", container)])
+        parent = self.image("parent"); container = self.container(parent, "untouched")
+        image = self.image("timeout")
+        self.freeze([self.specification("docker-image-remove", image)])
         real_run = subprocess.run
         def timeout_after(command, **options):
             result = real_run(command, **options); self.assertEqual(result.returncode, 0)
@@ -220,6 +232,8 @@ class NativeDockerCleanup(unittest.TestCase):
         self.assertEqual(result["outcome"], "partial-or-failed")
         self.assertEqual(result["native_failure"]["kind"], "native-timeout-outcome-unknown")
         self.assertEqual(self.reconcile()["targets"][0]["outcome"], "absent-provider-resource")
+        remaining = docker_cleanup.LocalDocker(self.endpoint, 30)
+        self.assertIn(container, remaining.listed_ids("container")); self.assertIn(parent, remaining.listed_ids("image"))
 
     @unittest.skipUnless(os.environ.get("DEVSPACE_DOCKER_TEST_PUBLIC_IMAGE"), "selected public immutable BusyBox fixture input required")
     def test_active_cache_records_remain_protected_during_actual_build(self):

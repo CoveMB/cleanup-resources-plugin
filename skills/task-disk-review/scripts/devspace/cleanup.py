@@ -212,6 +212,10 @@ def _confirm(plan, selected):
 
 
 def _revalidate(plan, selected, assessment_path, manifest_path, config_path, completed=()):
+    for row in selected:
+        if is_docker(row):
+            from .docker_cleanup import require_removal_supported
+            require_removal_supported(row["operation"])
     for row in completed:
         if is_npm_cache(row):
             from .npm_cache import observe

@@ -9,6 +9,7 @@ Reconciled on 29 October 2026 against source baseline `d7ead1f`. The [README](..
 | Python | 3.12+; standard-library helper | CI is configured for 3.12/3.14; individual results remain subject-bound |
 | macOS/Linux review | Required descriptor, identity and local filesystem capabilities; explicit roots and providers | Unsupported or unknown boundaries remain report-only |
 | Cleanup | Narrowly supported local macOS/APFS operations with fresh exact-plan terminal confirmation | No Linux, HFS or Windows cleanup certification |
+| Docker cleanup | Separately assessed unused images/exact build-cache under the existing macOS/APFS contract; all legacy container removal unavailable | Historical container effects do not prove writable-change completeness; old v3/v4 plans remain readable and pending intents retain observation-only reconciliation |
 | Native Windows | Unsupported, including assessed input/plan I/O and provider inventory | A uniform early refusal before optional I/O is still proposed |
 | WSL, remote, network, FUSE and synchronized paths | No executable eligibility; unresolved storage boundaries remain protected | WSL is a separate Linux environment, not native Windows support |
 | Codex | Existing manifest/UI policy and explicit invocation; historical installed CLI/desktop observations in README | Those observations identify older subjects and do not certify this combined package |
