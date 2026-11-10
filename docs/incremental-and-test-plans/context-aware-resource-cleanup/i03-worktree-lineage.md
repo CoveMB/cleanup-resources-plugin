@@ -10,7 +10,7 @@
 
 **Spec:** [Canonical design](../../superpowers/specs/2026-10-19-context-aware-resource-cleanup-design.md) §§3, 4, 6, 7; [incremental plan](plan.md) I03; [QA plan](qa-plan.md) Q03. Implementation baseline: `07e4407`, tree-identical to the reviewed I02 guidance repair `7023da9`; its 23 Python files remain byte-identical to `9bdec7e`/`76251ea`. Reconcile later edits before implementation.
 
-**Status:** Ready for implementation after the three independent plan reviews and affected repair reviews. The [review notes](review-notes.md#i02-source-and-i03-plan-review-gates) record those gates. I03 runtime behavior and acceptance remain unimplemented/unestablished.
+**Status:** I03 Tasks 1 and 2 are implemented in this candidate. Acceptance remains pending, including Q03, the §7 model-behavior evaluation, and three separate sequential independent reviews of the same complete candidate. The [review notes](review-notes.md#i02-source-and-i03-plan-review-gates) record the completed plan reviews and affected repair reviews.
 
 ## Global Constraints
 
