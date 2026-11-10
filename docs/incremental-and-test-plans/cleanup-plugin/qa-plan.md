@@ -1,6 +1,6 @@
 # Cleanup Resources Plugin: verification record
 
-Reconciled on 29 October 2026 against source baseline `d7ead1f`. This document identifies verification owners and evidence gaps. It does not repeat historical job results as current passes.
+Reconciled on 29 October 2026 against source baseline `d7ead1f`; continuation status updated on 9 November. This document identifies verification owners and evidence gaps. The [follow-up QA record](../context-aware-resource-cleanup/qa-plan.md) attributes existing baseline evidence to `9aa8fb4`; historical results are not new passes by this status update.
 
 ## Behavior and existing checks
 
@@ -34,6 +34,6 @@ The [CI workflow](../../../.github/workflows/tests.yml) configures Ubuntu/macOS 
 - Effective Codex CLI and desktop retention settings remain independently unknown. Holds cannot control another tool's automatic cleanup.
 - Broader architectures, older systems, isolated HOME/PATH relocation and real mount/storage combinations remain gaps described in [compatibility-plan.md](compatibility-plan.md).
 - Windows is unsupported. An early uniform refusal before optional input/output handling remains proposed.
-- The paused [future QA plan](../context-aware-resource-cleanup/qa-plan.md) separately owns new investigator/model comparisons and future operation acceptance. Its historical results do not establish features in this branch.
+- The resumed [context-aware QA plan](../context-aware-resource-cleanup/qa-plan.md) separately owns investigator/model comparisons and new operation acceptance. Its [continuation status](../context-aware-resource-cleanup/plan.md#continuation-status--9-november-2026) distinguishes implemented I01 source from separate I02 work, backlog and incomplete acceptance; historical results do not establish absent features.
 
 The documentation reconciliation changes no helper behavior or test contract. Its package integration result belongs to the merge request for the actual final candidate; this record does not claim a newly run full suite, provider trial, live-model evaluation or human cleanup acceptance.

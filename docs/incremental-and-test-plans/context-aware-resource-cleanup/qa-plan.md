@@ -1,6 +1,8 @@
-# Context-aware resource cleanup: proposed QA plan
+# Context-aware resource cleanup: QA plan
 
-Status: paused; no new implementation or evaluation is reported here. Reconciled on 29 October 2026 against `d7ead1f`. The [design](../../superpowers/specs/2026-10-19-context-aware-resource-cleanup-design.md) owns requirements and [plan.md](plan.md) maps the proposed increments.
+Status: implementation resumed on 9 November 2026; see [continuation status](plan.md#continuation-status--9-november-2026). The [design](../../superpowers/specs/2026-10-19-context-aware-resource-cleanup-design.md) owns requirements. This updates the 29 October reconciliation without treating source inclusion as acceptance.
+
+Baseline evidence for `9aa8fb4` records 213 local tests: 141 passed, 71 skipped and one Unix-socket creation error independently reproduced as an environment restriction. The [hosted Ubuntu/macOS matrix](https://github.com/CoveMB/cleanup-resources-plugin/actions/runs/41960085046) at that same source passed with 213 tests per job: Ubuntu Python 3.12/3.14 skipped 71 each; macOS Python 3.12/3.14 skipped 27/26 respectively. These results are inherited evidence, not a new run by this status update; skipped/native cases and installed/practical acceptance remain incomplete. Private historical model observations stay attributed to their tested subjects and do not certify this combined candidate.
 
 ## Behavioral acceptance matrix
 
@@ -55,4 +57,4 @@ If suitable resources, source/history access or an authorized evaluation route a
 
 Apply the separate independent implementation assignments and reports required by design section 7; distinct headings in one review do not satisfy that requirement. The final combined candidate must reconcile feature-native results, package/installed observations, Q09 paired comparisons and Q10 practical trials. Historical tests on other branches do not validate absent code.
 
-Real workspaces remain read-only. Installation, external payload transfer, live-model cost and native mutations require applicable separate authority; this paused plan supplies none. The user is the practical acceptance decision-maker. No test result authorizes production cleanup or automatic publication.
+Real workspaces remain read-only. Installation, external payload transfer, live-model cost and native mutations require applicable separate authority; this plan supplies none of that authority. The user is the practical acceptance decision-maker. No test result authorizes production cleanup or automatic publication.
