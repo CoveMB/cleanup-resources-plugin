@@ -92,6 +92,23 @@ class GeneratedOutputFixture(unittest.TestCase):
             result[str(path)] = (review.file_identity(m), path.read_bytes() if stat.S_ISREG(m.st_mode) else None)
         return result
 
+    def protected_policy_fixture(self):
+        # Deliberately nonalphabetic caller/config order distinguishes stable
+        # lexical deduplication from sorting or dropping distinct protections.
+        document=self.decided()
+        zh,mh,ah=[self.project/name for name in ('z-hold','m-hold','a-hold')]
+        ze,me,ae=[self.project/name for name in ('z-exclude','m-exclude','a-exclude')]
+        paths=[]
+        for directory in (zh,mh,ah,ze,me,ae):
+            directory.mkdir();leaf=directory/'control.bin';leaf.write_bytes(b'preserve private fixture control')
+            paths.extend((directory,leaf))
+            document['candidates'].extend((self.spec(directory,'directory-remove'),self.spec(leaf,'file-remove')))
+        config={'schema_version':1,'roots':[str(self.project)],'holds':[str(ah),str(mh)+'/.'],'exclusions':[str(ae),str(me)+'/.']}
+        options={'holds':[str(zh/'..'/'z-hold'),str(mh),str(zh)],'exclusions':[str(ze),str(me),str(ze/'..'/'z-exclude')]}
+        expected={'holds':[str(zh),str(mh),str(ah)],'exclusions':[str(ze),str(me),str(ae)]}
+        old={'holds':[str(zh),str(mh),str(zh),str(ah),str(mh)],'exclusions':[str(ze),str(me),str(ze),str(ae),str(me)]}
+        return document,config,options,expected,old,paths
+
     def independent(self, operation):
         """Separately authored retained source for the existing source-files method."""
         source=self.add_reference('retained-input',b'independently retained rebuild input\n')
@@ -484,6 +501,74 @@ class GeneratedOutputPlans(GeneratedOutputFixture):
                 self.assertNotIn('private target failure',json.dumps(output))
             finally:case.doCleanups()
 
+    def test_generated_directory_acquisition_requires_observed_file_size(self):
+        # A stable identity cannot turn premature EOF into complete inspection.
+        import types
+        for variant,complete,want_bytes in [('complete',True,55),('empty-eof',False,0),('prefix-eof',False,7),('error',False,0)]:
+            case=GeneratedOutputFixture();case.setUp()
+            try:
+                (case.directory/'empty.bin').unlink()
+                leaf=case.directory/'nested'/'result.bin';identity=(leaf.stat().st_dev,leaf.stat().st_ino)
+                document=case.decided();document['candidates']=document['candidates'][1:]
+                before=case.survivors();opened={};read_bytes=[0];read,fstat=os.read,os.fstat
+                def observed_stat(fd):opened[fd]=True;return fstat(fd)
+                def reading(fd,n):
+                    meta=os.fstat(fd)
+                    if (meta.st_dev,meta.st_ino)!=identity:return read(fd,n)
+                    if variant=='empty-eof' or variant=='prefix-eof' and read_bytes[0]:return b''
+                    if variant=='error':raise OSError('private directory read error')
+                    chunk=read(fd,min(n,7 if variant=='prefix-eof' else 3));read_bytes[0]+=len(chunk);return chunk
+                facade=types.SimpleNamespace(**{**vars(os),'read':reading,'fstat':observed_stat})
+                with self.subTest(variant=variant),patch.object(review,'os',facade):observed=case.reviewed(document)
+                row=case.explicit(observed)[0]
+                self.assertEqual(row['observation']['complete'],complete)
+                self.assertEqual(row['observation']['coverage']['complete'],complete)
+                self.assertEqual(observed['content']['read_bytes'],want_bytes)
+                if complete:self.assertEqual(row['assessment'],'Eligible');plans.validate_selection(observed['plan'],[row['id']])
+                else:
+                    self.assertEqual(row['assessment'],'Unavailable')
+                    with self.assertRaises(ValueError):plans.validate_selection(observed['plan'],[row['id']])
+                self.assertTrue(opened)
+                for fd in opened:
+                    with self.assertRaises(OSError):fstat(fd)
+                self.assertEqual(before,case.survivors());self.assertNotIn('private directory read error',json.dumps(observed))
+            finally:case.doCleanups()
+
+    def test_generated_directory_final_failure_preserves_cancellation(self):
+        # The last target failure must not hide a simultaneous cancellation.
+        import types
+        for boundary in ('error','eof','interrupt'):
+            for cancelled,expired in ((False,False),(True,False),(False,True),(True,True)):
+                case=GeneratedOutputFixture();case.setUp()
+                try:
+                    (case.directory/'empty.bin').unlink()
+                    leaf=case.directory/'nested'/'result.bin';identity=(leaf.stat().st_dev,leaf.stat().st_ino)
+                    document=case.decided();document['candidates']=document['candidates'][1:]
+                    before=case.survivors();active=[False];opened={};read,fstat,clock=os.read,os.fstat,time.monotonic
+                    def observed_stat(fd):opened[fd]=True;return fstat(fd)
+                    def reading(fd,n):
+                        meta=os.fstat(fd)
+                        if (meta.st_dev,meta.st_ino)!=identity:return read(fd,n)
+                        if boundary=='error':active[0]=True;raise OSError('private final directory error')
+                        if boundary=='interrupt':active[0]=True;raise KeyboardInterrupt
+                        data=read(fd,n)
+                        if not data:active[0]=True
+                        return data
+                    facade=types.SimpleNamespace(**{**vars(os),'read':reading,'fstat':observed_stat})
+                    with self.subTest(boundary=boundary,cancelled=cancelled,expired=expired),patch.object(review,'os',facade),patch.object(review.time,'monotonic',side_effect=lambda:clock()+100 if expired and active[0] else clock()):
+                        observed=case.reviewed(document,cancelled=lambda:cancelled and active[0])
+                    wanted_cancel=cancelled or boundary=='interrupt'
+                    self.assertEqual(observed['cancelled'],wanted_cancel)
+                    row=case.explicit(observed)[0]
+                    self.assertEqual(row['assessment'],'Unavailable' if wanted_cancel or expired or boundary=='error' else 'Eligible')
+                    if wanted_cancel or expired:self.assertFalse(observed['coverage']['complete'])
+                    if wanted_cancel:self.assertEqual(row['observation']['coverage']['stop_reason'],'cancelled')
+                    self.assertTrue(opened)
+                    for fd in opened:
+                        with self.assertRaises(OSError):fstat(fd)
+                    self.assertEqual(before,case.survivors());self.assertNotIn('private final directory error',json.dumps(observed))
+                finally:case.doCleanups()
+
     def test_generated_mixed_methods_overlap_and_evidence_dependencies(self):
         doc = self.decided(); result = self.reviewed(doc)
         for rows in (self.explicit(result), list(reversed(self.explicit(result)))):
@@ -612,36 +697,129 @@ class GeneratedOutputPlans(GeneratedOutputFixture):
                     else:self.assertEqual(plans.validate_selection(forged,ids),[row])
         git.retained()
 
+    def test_generated_npm_effects_preserve_selected_evidence(self):
+        # Admission must preserve other rows' sources from the real body unlink
+        # and index append, without treating a provider label as a path.
+        import base64
+        from devspace import npm_cache
+        for operation in ('file-remove','directory-remove'):
+            for role in ('decision','provenance','consumer','release'):
+                for effect_kind in ('body','index'):
+                    for alias in (False,True):
+                        with self.subTest(operation=operation,role=role,effect=effect_kind,alias=alias):
+                            case=GeneratedOutputFixture();case.setUp()
+                            try:
+                                cache=case.base/'cache';cache.mkdir();store=cache/'_cacache';store.mkdir()
+                                payload=QUOTE.encode();resource={'cache':str(cache),'key':'fixture-key','integrity':'sha512-'+base64.b64encode(hashlib.sha512(payload).digest()).decode()}
+                                body,index=npm_cache.effect_paths(resource)
+                                for path in (body,index):path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(payload)
+                                effect=body if effect_kind=='body' else index
+                                source=effect
+                                if alias:source=case.records/'physical-alias';os.link(effect,source)
+                                case.references['effect-source']={'path':str(source),'sha256':hashlib.sha256(payload).hexdigest()}
+                                case.add_reference('provider-source',payload)
+                                provider={'operation':'npm-cache-remove','npm':resource,'category':'cache','purpose':'disposable selected cached fixture',
+                                    'content':{'method':'source-file','reference':'provider-source','basis':['provenance']},
+                                    'recovery':{'kind':'accepted-loss','basis':['release'],'explanation':'Lose this selected cache body.'},
+                                    'consumer_scope':{'basis':['scope'],'unresolved':[]},'consumers':[],
+                                    'release':{'basis':['release'],'checkpoint':'fixture released'},'findings':[]}
+                                native={'cache':str(cache),'resource':resource,'cache_identity':review.file_identity(cache.stat()),'store_identity':review.file_identity(store.stat()),
+                                    'max_entries':2000,'tools':{'node':'/fixture/node','npm':'/fixture/npm-cli.js','root':'/fixture/npm'},
+                                    'records':[{'key':'fixture-key','integrity':resource['integrity'],'size':len(payload),'time':1}],
+                                    'content_identity':review.file_identity(body.stat()),'content_sha256':hashlib.sha256(payload).hexdigest(),
+                                    'size':{'logical_bytes':len(payload),'allocated_bytes':body.stat().st_blocks*512}}
+                                document=case.decided();spec=next(c for c in document['candidates'] if c['operation']==operation)
+                                document['candidates']=[spec]
+                                if role=='decision':spec['recovery']['decision']['source_reference']='effect-source'
+                                elif role=='provenance':spec['content']['basis']=['effect-source']
+                                elif role=='consumer':spec['consumer_scope']['basis']=['effect-source'];spec['consumers'][0]['basis']=['effect-source']
+                                else:spec['release']['basis']=['effect-source'];spec['recovery']['basis']=['effect-source']
+                                independent=case.reviewed(document);generated=case.explicit(independent)[0]
+                                self.assertEqual(generated['assessment'],'Eligible')
+                                with patch.object(npm_cache,'inspect',return_value=native):
+                                    provider_report=plans.review_scope(case.project,assessment={**document,'candidates':[provider]})
+                                cached=next(r for r in provider_report['candidates'] if r.get('operation')=='npm-cache-remove')
+                                self.assertEqual(cached['assessment'],'Eligible')
+                                paths=[cache,*cache.rglob('*')]
+                                before=(case.survivors(),{str(p):(review.file_identity(p.lstat()),p.read_bytes() if p.is_file() else None) for p in paths})
+                                for reverse in (False,True):
+                                    combined={**document,'candidates':[spec,provider][::(-1 if reverse else 1)]}
+                                    with patch.object(npm_cache,'inspect',return_value=native):observed=case.reviewed(combined)
+                                    rows=[r for r in observed['candidates'] if r.get('specification_digest')]
+                                    self.assertTrue(all(r['assessment']!='Eligible' for r in rows))
+                                    # A fresh plan digest cannot bypass the same
+                                    # invariant on separately eligible rows.
+                                    frozen=copy.deepcopy(independent['plan']);frozen['candidates']=[generated,cached][::(-1 if reverse else 1)]
+                                    frozen['digest']=plans.digest({k:v for k,v in frozen.items() if k!='digest'})
+                                    pp=case.base/('selected-'+str(reverse)+'.json');pp.write_text(json.dumps(frozen))
+                                    with self.assertRaisesRegex(ValueError,'evidence|inputs'):cleanup._load_plan(pp,[r['id'] for r in frozen['candidates']])
+                                    if sys.platform=='darwin':
+                                        with patch.object(cleanup,'_state_path',return_value=case.base/'private-state'),patch.object(cleanup,'_confirm',side_effect=AssertionError('conflicting batch reached confirmation')),patch.object(npm_cache,'remove',side_effect=AssertionError('conflicting batch reached npm')):
+                                            with self.assertRaisesRegex(ValueError,'evidence|inputs'):cleanup.apply(pp,case.base/'unused-assessment.json',[r['id'] for r in frozen['candidates']])
+                                self.assertEqual(before,(case.survivors(),{str(p):(review.file_identity(p.lstat()),p.read_bytes() if p.is_file() else None) for p in paths}))
+                                # Keep the full batch's source obligations even
+                                # if a generated item has already completed.
+                                if operation=='file-remove':case.file.unlink()
+                                else:
+                                    import shutil
+                                    shutil.rmtree(case.directory)
+                                with self.assertRaisesRegex(ValueError,'evidence|inputs'):plans.validate_selection(frozen,[r['id'] for r in frozen['candidates']])
+                                # Unrelated useful rows are still selectable.
+                                control=case.decided({**case.assessment,'candidates':[case.assessment['candidates'][1 if operation=='file-remove' else 0]]})
+                                with patch.object(npm_cache,'inspect',return_value=native):useful=case.reviewed({**control,'candidates':[*control['candidates'],provider]})
+                                selected=[r for r in useful['candidates'] if r.get('assessment')=='Eligible']
+                                self.assertEqual(len(selected),2);plans.validate_selection(useful['plan'],[r['id'] for r in selected])
+                            finally:case.doCleanups()
+
     def test_generated_task_project_global_lineage_parity(self):
-        from devspace.global_inventory import review_global
-        doc = self.decided()
-        held = self.project/'held'; held.mkdir(); (held/'control').write_text('held')
-        excluded = self.project/'excluded'; excluded.mkdir(); (excluded/'control').write_text('excluded')
-        config = {'schema_version':1,'roots':[str(self.project)],'holds':[str(held)],'exclusions':[str(excluded)]}
-        options = {'holds':[str(held/'..'/'held'),str(held)],'exclusions':[str(excluded/'..'/'excluded'),str(excluded)]}
+        import types
+        from devspace import exact_file
+        doc,config,options,expected,old_policy,protected=self.protected_policy_fixture()
+        protected_ids={(p.stat().st_dev,p.stat().st_ino) for p in protected if p.is_file()}
+        before=self.survivors();read=os.read;payloads=[]
+        def guarded(fd,n):
+            metadata=os.fstat(fd)
+            if (metadata.st_dev,metadata.st_ino) in protected_ids:
+                payloads.append((metadata.st_dev,metadata.st_ino));raise AssertionError('protected policy payload read')
+            return read(fd,n)
+        facade=types.SimpleNamespace(**{**vars(os),'read':guarded})
         for mode in ('task','project','global'):
-            with self.subTest(mode=mode):
-                result = plans.review_scope(config if mode=='global' else self.project, mode=mode, assessment=doc, **options)
-                self.assertEqual(result['plan']['schema_version'],6)
-                self.assertTrue(all(r['assessment']=='Eligible' for r in self.explicit(result)))
-                plans.validate_selection(result['plan'],[r['id'] for r in self.explicit(result)])
+            with self.subTest(mode=mode),patch.object(review,'os',facade),patch.object(exact_file,'os',facade):
+                selected_options=options if mode=='global' else {key:options[key]+config[key] for key in ('holds','exclusions')}
+                result=plans.review_scope(config if mode=='global' else self.project,mode=mode,assessment=doc,**selected_options)
+                useful=[row for row in self.explicit(result) if row['path'] in (str(self.file),str(self.directory))]
+                controls=[row for row in self.explicit(result) if row['path'] not in (str(self.file),str(self.directory))]
+                self.assertEqual(len(useful),2);self.assertTrue(all(row['assessment']=='Eligible' for row in useful))
+                self.assertEqual(len(controls),12);self.assertTrue(all(row['assessment']=='Keep' for row in controls))
+                for row in controls:
+                    self.assertNotIn('observation',row)
+                    with self.assertRaises(ValueError):plans.validate_selection(result['plan'],[row['id']])
+                for key in ('holds','exclusions'):self.assertEqual(result['plan']['policy'][key],expected[key] if mode=='global' else old_policy[key])
+                pp=self.base/(mode+'-policy-plan.json');plans.write_plan(pp,result['plan'])
+                self.assertEqual(cleanup._load_plan(pp,[row['id'] for row in useful])[1],useful)
                 if mode=='global':
-                    self.assertEqual(result['plan']['policy']['holds'],[str(held)])
-                    self.assertEqual(result['plan']['policy']['exclusions'],[str(excluded)])
-                    ap=self.base/'global-assessment.json'; ap.write_text(json.dumps(doc))
-                    cp=self.base/'config.json'; cp.write_text(json.dumps(config))
-                    # Only the final native snapshot boundary is doubled on Linux.
-                    with patch('devspace.exact_file.snapshot'),patch.object(cleanup,'_snapshot'):
-                        cleanup._revalidate(result['plan'],self.explicit(result),ap,None,cp)
-                    changed={**config,'holds':[str(held/'..'/'held'),str(held)]}; cp.write_text(json.dumps(changed))
-                    with patch.object(plans,'review_scope',side_effect=AssertionError('config must refuse before reassessment')):
-                        with self.assertRaisesRegex(ValueError,'global configuration changed'):
-                            cleanup._revalidate(result['plan'],self.explicit(result),ap,None,cp)
+                    ap=self.base/'global-assessment.json';ap.write_text(json.dumps(doc));cp=self.base/'config.json';cp.write_text(json.dumps(config))
+                    # Explicit portable double only at final native snapshots;
+                    # original config, all sources and real review remain active.
+                    with patch.object(exact_file,'snapshot'),patch.object(cleanup,'_snapshot'):
+                        self.assertEqual(cleanup._revalidate(result['plan'],useful,ap,None,cp),useful)
+                    changed={**config,'holds':[str(self.project/'a-hold'/'..'/'a-hold'),str(self.project/'m-hold'),str(self.project/'a-hold')]}
+                    cp.write_text(json.dumps(changed))
+                    with patch.object(plans,'review_scope',side_effect=AssertionError('config drift before reassessment')),patch.object(exact_file,'snapshot',side_effect=AssertionError('config drift before snapshot')),patch.object(cleanup,'_snapshot',side_effect=AssertionError('config drift before snapshot')):
+                        with self.assertRaisesRegex(ValueError,'global configuration changed'):cleanup._revalidate(result['plan'],useful,ap,None,cp)
+            self.assertEqual(before,self.survivors());self.assertEqual(payloads,[])
         for version in range(1,6):
-            report=self.reviewed(doc)
-            old={'schema_version':version,'references':{},'candidates':[]}
-            plans.freeze_review(report,old,None,[str(held),str(held)],[],report['plan']['policy']['limits'])
-            self.assertEqual(report['plan']['policy']['holds'],[str(held),str(held)])
+            with self.subTest(old_version=version):
+                old={'schema_version':version,'references':{},'candidates':[]}
+                observed=plans.review_scope(config,mode='global',assessment=old,**options)
+                original=copy.deepcopy(observed['plan'])
+                for key in ('holds','exclusions'):self.assertEqual(original['policy'][key],old_policy[key])
+                plans.freeze_review(observed,old,None,old_policy['holds'],old_policy['exclusions'],original['policy']['limits'])
+                self.assertEqual(observed['plan'],original);self.assertEqual(observed['plan']['digest'],original['digest'])
+                unique=copy.deepcopy(observed)
+                plans.freeze_review(unique,old,None,expected['holds'],expected['exclusions'],original['policy']['limits'])
+                self.assertNotEqual(unique['plan']['digest'],original['digest'])
+        self.assertEqual(before,self.survivors())
 
         case=GeneratedOutputFixture();case.setUp();self.addCleanup(case.doCleanups)
         renamed=case.project/'literal \noutput.bin';case.file.rename(renamed);case.file=renamed;case.assessment['candidates'][0]['path']=str(renamed)
@@ -752,11 +930,154 @@ class GeneratedOutputPlans(GeneratedOutputFixture):
                 self.assertNotIn('private cached quote failure',json.dumps(observed))
         self.assertEqual(before,self.survivors())
 
+    def test_generated_deadline_stops_before_next_evidence_stage(self):
+        # Completing a source across the absolute deadline cannot start another
+        # acquisition or decode an already cached source, even on empty stages.
+        import types
+        for cached in (False,True):
+            for cancel in (False,True):
+                with self.subTest(cached=cached,cancel=cancel):
+                    case=GeneratedOutputFixture();case.setUp()
+                    try:
+                        document=case.decided();document['candidates']=document['candidates'][:1]
+                        if cached:
+                            spec=document['candidates'][0]
+                            for key in ('content','recovery','consumer_scope','release'):spec[key]['basis']=['human']
+                            for consumer in spec['consumers']:consumer['basis']=['human']
+                        before=case.survivors();active=[False];acquisitions=[];fds=set()
+                        reference=plans._reference;clock=time.monotonic;fstat=os.fstat
+                        class Uninterpreted(bytes):
+                            def decode(self,*args,**kwargs):raise AssertionError('cached decision interpreted after deadline')
+                        def observed_stat(fd):fds.add(fd);return fstat(fd)
+                        def acquired(*args,**kwargs):
+                            if active[0]:raise AssertionError('later reference acquired after deadline')
+                            value,identity=reference(*args,**kwargs);acquisitions.append(args[0]);active[0]=True
+                            return (Uninterpreted(value) if cached else value),identity
+                        with patch.object(plans,'_reference',side_effect=acquired),patch.object(plans,'os',types.SimpleNamespace(**{**vars(os),'fstat':observed_stat})),patch.object(plans.time,'monotonic',side_effect=lambda:clock()+100 if active[0] else clock()):
+                            observed=case.reviewed(document,cancelled=lambda:cancel and active[0])
+                        row=case.explicit(observed)[0]
+                        self.assertEqual(row['assessment'],'Unavailable');self.assertFalse(observed['coverage']['complete'])
+                        self.assertTrue(row['observation']['complete']);self.assertEqual(observed['cancelled'],cancel)
+                        if not cancel:self.assertEqual(row['reason'],'generated evidence inspection time limit')
+                        self.assertEqual(len(acquisitions),1)
+                        for fd in fds:
+                            with self.assertRaises(OSError):fstat(fd)
+                        self.assertEqual(before,case.survivors())
+                    finally:case.doCleanups()
+
+    def test_generated_completion_failures_preserve_cancellation_and_deadline(self):
+        # Each failure is real in the named owner. Only its final fault/time
+        # signal is injected; ordinary failures must stay Review without cancel.
+        import types,hashlib as hashing
+        for operation in ('file-remove','directory-remove'):
+            for boundary in ('digest','identity','alias','quote','quote-mismatch','binding'):
+                for cached in ((False,True) if boundary in ('quote','quote-mismatch','binding') else (False,)):
+                    for cancel,expired in ((False,False),(True,False),(False,True),(True,True)):
+                        with self.subTest(operation=operation,boundary=boundary,cached=cached,cancel=cancel,expired=expired):
+                            case=GeneratedOutputFixture();case.setUp()
+                            try:
+                                if boundary=='quote-mismatch':
+                                    source=case.records/'human.txt';source.write_bytes(b'ordinary record without the claimed quote')
+                                    case.references['human']['sha256']=hashlib.sha256(source.read_bytes()).hexdigest()
+                                document=case.decided();document['candidates'].sort(key=lambda spec:spec['operation']!=operation)
+                                first=document['candidates'][0]
+                                if cached:first['content']['basis'].append('human')
+                                before=case.survivors();active=[False];fds=set();stats=[0]
+                                clock=time.monotonic;fstat=os.fstat;read=plans._read_file;reference=plans._reference;sha256=hashing.sha256
+                                source_identity=review.file_identity((case.records/'human.txt').stat())
+                                alias_target=case.file if operation=='file-remove' else case.directory/'nested/result.bin'
+                                alias_identity=review.file_identity(alias_target.stat())
+                                class StaleBinding(str):
+                                    def __ne__(self,other):active[0]=True;return True
+                                class MismatchText(str):
+                                    def __contains__(self,quote):active[0]=True;return super().__contains__(quote)
+                                class MismatchBytes(bytes):
+                                    def decode(self,*args,**kwargs):return MismatchText(super().decode(*args,**kwargs))
+                                class InvalidQuote(bytes):
+                                    def decode(self,*args,**kwargs):active[0]=True;raise UnicodeError('private completion sentinel')
+                                if boundary=='digest':document['references']['human']['sha256']='0'*64
+                                if boundary=='binding':first['recovery']['decision']['binding_digest']=StaleBinding('0'*64)
+                                def observed_stat(fd):
+                                    metadata=fstat(fd);fds.add(fd)
+                                    if boundary=='identity' and (metadata.st_dev,metadata.st_ino)==(source_identity['device'],source_identity['inode']):
+                                        stats[0]+=1
+                                        if stats[0]%2==0:
+                                            active[0]=True
+                                            return types.SimpleNamespace(**{**{key:getattr(metadata,key) for key in dir(metadata) if key.startswith('st_')},'st_ino':metadata.st_ino+1})
+                                    return metadata
+                                def reading(path,*args,**kwargs):
+                                    value,identity=read(path,*args,**kwargs)
+                                    if Path(path).name=='human.txt':
+                                        if boundary=='quote':value=InvalidQuote(value)
+                                        elif boundary=='quote-mismatch':value=MismatchBytes(value)
+                                        elif boundary=='alias':active[0]=True;identity={**identity,**{key:alias_identity[key] for key in ('device','inode')}}
+                                    return value,identity
+                                def hashed(data=b'',*args,**kwargs):
+                                    result=sha256(data,*args,**kwargs)
+                                    if boundary!='digest' or data!=QUOTE.encode():return result
+                                    class FinishedHash:
+                                        def hexdigest(self):active[0]=True;return result.hexdigest()
+                                    return FinishedHash()
+                                def acquired(*args,**kwargs):
+                                    if active[0] and (cancel or expired):raise AssertionError('later evidence acquired after completion stop')
+                                    return reference(*args,**kwargs)
+                                with patch.object(plans,'os',types.SimpleNamespace(**{**vars(os),'fstat':observed_stat})),patch.object(plans,'_read_file',side_effect=reading),patch.object(plans,'_reference',side_effect=acquired),patch.object(plans,'hashlib',types.SimpleNamespace(**{**vars(hashing),'sha256':hashed})),patch.object(plans.time,'monotonic',side_effect=lambda:clock()+100 if expired and active[0] else clock()):
+                                    observed=case.reviewed(document,cancelled=lambda:cancel and active[0])
+                                self.assertTrue(active[0]);self.assertEqual(observed['cancelled'],cancel)
+                                row=next(row for row in case.explicit(observed) if row['operation']==operation)
+                                self.assertEqual(row['assessment'],'Unavailable' if cancel or expired else 'Review')
+                                self.assertTrue(row['observation']['complete'])
+                                if cancel or expired:self.assertFalse(observed['coverage']['complete'])
+                                if expired and not cancel:self.assertEqual(row['reason'],'generated evidence inspection time limit')
+                                with self.assertRaises(ValueError):plans.validate_selection(observed['plan'],[row['id']])
+                                self.assertNotIn('private completion sentinel',json.dumps(observed));self.assertNotIn(QUOTE,json.dumps(observed))
+                                self.assertTrue(fds)
+                                for fd in fds:
+                                    with self.assertRaises(OSError):fstat(fd)
+                                self.assertEqual(before,case.survivors())
+                            finally:case.doCleanups()
+
+    def test_generated_zero_evidence_remainder_completion_precedence(self):
+        # An empty final reference at the exact aggregate byte bound still has
+        # cancellation/deadline completion; target bytes remain fully inspected.
+        import types
+        for cancel,expired in ((False,False),(True,False),(False,True),(True,True)):
+            with self.subTest(cancel=cancel,expired=expired):
+                case=GeneratedOutputFixture();case.setUp()
+                try:
+                    payload=QUOTE.encode()+b'x'*(65536-len(QUOTE.encode()))
+                    case.add_reference('full-bound',payload);case.add_reference('empty-final',b'')
+                    document=copy.deepcopy(case.assessment)
+                    for spec in document['candidates']:
+                        spec['content']['basis']=['full-bound'];spec['recovery']['basis']=['empty-final']
+                        spec['consumer_scope']['basis']=['full-bound'];spec['release']['basis']=['full-bound']
+                        spec['consumers'][0]['basis']=['full-bound']
+                    document=case.decided(document)
+                    for spec in document['candidates']:spec['recovery']['decision']['source_reference']='full-bound'
+                    before=case.survivors();active=[False];fds=set();reference=plans._reference;clock=time.monotonic;fstat=os.fstat
+                    def observed_stat(fd):fds.add(fd);return fstat(fd)
+                    def acquired(identifier,*args,**kwargs):
+                        if active[0] and (cancel or expired):raise AssertionError('acquisition after zero-budget completion stop')
+                        value=reference(identifier,*args,**kwargs)
+                        if identifier=='empty-final':self.assertEqual(kwargs['limit'],0);active[0]=True
+                        return value
+                    with patch.object(plans,'_reference',side_effect=acquired),patch.object(plans,'os',types.SimpleNamespace(**{**vars(os),'fstat':observed_stat})),patch.object(plans.time,'monotonic',side_effect=lambda:clock()+100 if expired and active[0] else clock()):
+                        observed=case.reviewed(document,cancelled=lambda:cancel and active[0])
+                    row=case.explicit(observed)[0];self.assertTrue(active[0]);self.assertEqual(observed['cancelled'],cancel)
+                    self.assertEqual(row['assessment'],'Unavailable' if cancel or expired else 'Eligible')
+                    self.assertTrue(row['observation']['complete'])
+                    if cancel or expired:self.assertFalse(observed['coverage']['complete'])
+                    for fd in fds:
+                        with self.assertRaises(OSError):fstat(fd)
+                    self.assertEqual(before,case.survivors())
+                finally:case.doCleanups()
+
     def test_generated_provider_cancellation_cli_preserves_final_v6_report(self):
         import base64,subprocess
         from devspace import git_inventory
         lp=self.base/'cancel-lineage.json'
         cache=self.base/'cancel-cache';cache.mkdir()
+        (self.directory/'empty.bin').unlink()  # one final directory payload acquisition
         providers=[{'operation':'docker-image-remove','docker':{'endpoint':'unix://'+str(self.base/'absent.sock'),'id':'sha256:'+'a'*64},'category':'image'},
                    {'operation':'npm-cache-remove','npm':{'cache':str(cache),'key':'fixture','integrity':'sha512-'+base64.b64encode(hashlib.sha512(b'fixture').digest()).decode()},'category':'cache'}]
         ap=self.base/'cancel-assessment.json';cp=self.base/'cancel-config.json';cp.write_text(json.dumps({'schema_version':1,'roots':[str(self.project)]}))
@@ -765,14 +1086,16 @@ class GeneratedOutputPlans(GeneratedOutputFixture):
 from pathlib import Path
 sys.path.insert(0,sys.argv[1])
 from devspace import plans,docker_cleanup,npm_cache,git_inventory
+from devspace import review as directory_review
+import os,types
 stage,target=sys.argv[2:4];active=[False];scope=plans.review_scope;read=plans._read_file;review=plans.review_task
 from devspace import exact_file
 file_review=exact_file.review_file
 def forbidden(*args,**kwargs):raise AssertionError('provider or advisory acquisition after generated cancellation')
 def unavailable(*args,**kwargs):raise ValueError('deterministic unavailable provider control')
 docker_cleanup.LocalDocker=forbidden
-docker_cleanup.inspect=unavailable if stage=='control' else forbidden
-npm_cache.inspect=unavailable if stage=='control' else forbidden
+docker_cleanup.inspect=unavailable if stage in ('control','directory-error-control') else forbidden
+npm_cache.inspect=unavailable if stage in ('control','directory-error-control') else forbidden
 git_inventory.observe_lineage=forbidden
 def reviewed(path,*args,**kwargs):
  if str(path)==target and stage=='initial':active[0]=True
@@ -794,6 +1117,18 @@ def reading(path,*args,**kwargs):
  if Path(path).name=='human.txt' and stage=='quote-error':data=QuoteBytes(data)
  return data,identity
 def scoped(*args,**kwargs):return scope(*args,**{**kwargs,'cancelled':lambda:active[0]})
+if stage.startswith('directory-'):
+ leaf=Path(target)/'nested/result.bin';identity=(leaf.stat().st_dev,leaf.stat().st_ino);real_read=os.read
+ def directory_read(fd,n):
+  metadata=os.fstat(fd)
+  if (metadata.st_dev,metadata.st_ino)!=identity:return real_read(fd,n)
+  if stage!='directory-eof':
+   if stage!='directory-error-control':active[0]=True
+   raise OSError('private directory completion failure')
+  data=real_read(fd,n)
+  if not data:active[0]=True
+  return data
+ directory_review.os=types.SimpleNamespace(**{**vars(os),'read':directory_read})
 plans.review_task=reviewed;exact_file.review_file=file_reviewed;plans._read_file=reading;plans.review_scope=scoped
 sys.argv=[sys.argv[4],*sys.argv[5:]]
 runpy.run_path(sys.argv[0],run_name='__main__')
@@ -812,21 +1147,22 @@ runpy.run_path(sys.argv[0],run_name='__main__')
                                 request['integration']={'kind':kind,'source_commit':'b'*40,'destination_commit':'c'*40}
                                 if kind=='squash':request['integration']['source_base_commit']='d'*40
                             lp.write_text(json.dumps(request));lineage=['--git-lineage',str(lp)] if kind else []
-                            for stage in ('control','initial','final','evidence-error','quote-error'):
+                            for stage in (('control','initial','final','evidence-error','quote-error') + (('directory-error-control','directory-error','directory-eof') if specification['operation']=='directory-remove' else ())):
                                 with self.subTest(operation=specification['operation'],provider=provider['operation'],reverse=reverse,mode=mode,claim=kind,stage=stage):
                                     observed=subprocess.run([sys.executable,'-B','-c',code,str(cli.parent),stage,specification['path'],str(cli),'review',*scope,*lineage,'--assessment',str(ap),'--json'],capture_output=True,text=True,timeout=20)
-                                    self.assertIn(observed.returncode,(0,2) if stage=='control' else (130,),observed.stderr)
+                                    self.assertIn(observed.returncode,(0,2) if stage in ('control','directory-error-control') else (130,),observed.stderr)
                                     result=json.loads(observed.stdout);rows={r.get('operation'):r for r in result['candidates'] if r.get('specification_digest')}
                                     output=rows[specification['operation']];companion=rows[provider['operation']]
                                     self.assertEqual(output['assessment'],'Eligible' if stage=='control' else 'Unavailable')
                                     self.assertEqual(result['plan']['schema_version'],6);self.assertEqual(result['plan']['assessment_digest'],plans.digest(document))
                                     self.assertEqual(result['plan']['digest'],plans.digest({k:v for k,v in result['plan'].items() if k!='digest'}))
-                                    if stage!='control':
+                                    if stage not in ('control','directory-error-control'):
                                         self.assertTrue(result['cancelled']);self.assertFalse(result['coverage']['complete'])
                                         self.assertEqual(companion['assessment'],'Unavailable');self.assertEqual(companion['reason'],'review cancelled; provider state unexamined')
                                         self.assertNotIn('native',companion);self.assertNotIn('observation',companion)
                                         with self.assertRaises(ValueError):plans.validate_selection(result['plan'],[output['id']])
-                                    for sentinel in ('private decode sentinel','private evidence sentinel',QUOTE):self.assertNotIn(sentinel,observed.stdout)
+                                    if stage=='directory-error-control':self.assertFalse(result['cancelled']);self.assertFalse(result['coverage']['complete'])
+                                    for sentinel in ('private decode sentinel','private evidence sentinel','private directory completion failure',QUOTE):self.assertNotIn(sentinel,observed.stdout)
                                 if kind:
                                     expected=git_inventory._lineage_result(claim=request.get('integration'))
                                     observed_lineage=result['git_lineage']
@@ -897,13 +1233,26 @@ class GeneratedOutputNativeCleanup(GeneratedOutputFixture):
                     for row in case.explicit(result):
                         if row not in rows:self.assertTrue(Path(row['path']).exists())
                 finally:case.doCleanups()
-        # Nonempty global protections and duplicate lexical spellings must replay exactly.
-        held=self.project/'held'; held.mkdir(); excluded=self.project/'excluded'; excluded.mkdir()
-        config={'schema_version':1,'roots':[str(self.project)],'holds':[str(held)],'exclusions':[str(excluded)]}
-        doc=self.decided(); result=plans.review_scope(config,mode='global',assessment=doc,holds=[str(held/'..'/'held'),str(held)],exclusions=[str(excluded),str(excluded)])
-        pp=self.base/'global-plan.json'; plans.write_plan(pp,result['plan']); ap=self.base/'global-assessment.json'; ap.write_text(json.dumps(doc)); cp=self.base/'global-config.json'; cp.write_text(json.dumps(config))
-        with patch.object(cleanup,'_confirm',return_value=True): receipt=self.apply(pp,ap,self.explicit(result),config_path=cp)
-        self.assertEqual(receipt['outcome'],'completed'); self.assertTrue(held.is_dir()); self.assertTrue(excluded.is_dir())
+        # Nonempty global protections retain distinct contribution order and
+        # payload survivors through real apply on the qualified native host.
+        doc,config,options,expected,old_policy,protected=self.protected_policy_fixture()
+        from devspace import exact_file
+        guarded_ids={(p.stat().st_dev,p.stat().st_ino) for p in protected if p.is_file()};read=os.read
+        def guarded(fd,n):
+            metadata=os.fstat(fd)
+            self.assertNotIn((metadata.st_dev,metadata.st_ino),guarded_ids,'native excluded/held payload read')
+            return read(fd,n)
+        facade=types.SimpleNamespace(**{**vars(os),'read':guarded})
+        survivors=[*protected,*self.records.iterdir(),self.project/'useful.txt',self.project/'.env']
+        before={str(p):(review.file_identity(p.stat()),p.read_bytes() if p.is_file() else None) for p in survivors}
+        with patch.object(review,'os',facade),patch.object(exact_file,'os',facade):
+            result=plans.review_scope(config,mode='global',assessment=doc,**options)
+            for key in ('holds','exclusions'):self.assertEqual(result['plan']['policy'][key],expected[key])
+            selected=[row for row in self.explicit(result) if row['path'] in (str(self.file),str(self.directory))]
+            pp=self.base/'global-plan.json';plans.write_plan(pp,result['plan']);ap=self.base/'global-assessment.json';ap.write_text(json.dumps(doc));cp=self.base/'global-config.json';cp.write_text(json.dumps(config))
+            with patch.object(cleanup,'_confirm',return_value=True):receipt=self.apply(pp,ap,selected,config_path=cp)
+        self.assertEqual(receipt['outcome'],'completed')
+        self.assertEqual(before,{str(p):(review.file_identity(p.stat()),p.read_bytes() if p.is_file() else None) for p in survivors})
 
         case=GeneratedOutputFixture();case.setUp()
         try:

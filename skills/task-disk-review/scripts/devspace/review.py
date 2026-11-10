@@ -135,11 +135,11 @@ def review_task(selected, *, max_entries=2000, max_depth=12, timeout=10.0, cance
 
     def stop_if_needed():
         nonlocal stopped
-        if stopped:
-            return True
-        if cancelled is not None and cancelled():
+        if report["cancelled"] or cancelled is not None and cancelled():
             report["cancelled"] = True
             coverage["stop_reason"] = "cancelled"
+        elif stopped:
+            return True
         elif time.monotonic() - started >= timeout:
             coverage["stop_reason"] = "time limit; remaining coverage unknown"
         else:
@@ -274,18 +274,20 @@ def review_task(selected, *, max_entries=2000, max_depth=12, timeout=10.0, cance
                                 unavailable(row["path"], "file mount boundary; contents not inspected", row)
                                 continue
                             digest = hashlib.sha256()
+                            acquired = 0
                             while not stop_if_needed():
                                 chunk = os.read(file_descriptor, min(65536, max_content_bytes - content_bytes + 1))
                                 if not chunk:
                                     break
                                 content_bytes += len(chunk)
+                                acquired += len(chunk)
                                 if content_bytes > max_content_bytes:
                                     stopped = True
                                     partial()
                                     coverage["stop_reason"] = "content byte limit; remaining contents unknown"
                                     break
                                 digest.update(chunk)
-                            if not stopped and file_identity(os.fstat(file_descriptor)) == file_identity(before):
+                            if not stopped and acquired == before.st_size and file_identity(os.fstat(file_descriptor)) == file_identity(before):
                                 row["sha256"] = digest.hexdigest()
                             else:
                                 unavailable(row["path"], "incomplete or changed file contents", row)
@@ -370,10 +372,18 @@ def review_task(selected, *, max_entries=2000, max_depth=12, timeout=10.0, cance
         report["invalid_scope"] = descriptor is None
         unavailable(".", "scope unavailable: " + error_code(error))
     finally:
-        if inspect_content:
-            report["content"] = {"complete": coverage["complete"] and "identity" in report, "read_bytes": content_bytes}
         if descriptor is not None:
             os.close(descriptor)
+            # Completion can be the last acquisition, including a handled read
+            # failure. Observe interruption after all owned descriptors close.
+            try:
+                stop_if_needed()
+            except KeyboardInterrupt:
+                partial()
+                report["cancelled"] = True
+                coverage["stop_reason"] = "cancelled"
+        if inspect_content:
+            report["content"] = {"complete": coverage["complete"] and "identity" in report, "read_bytes": content_bytes}
     return report
 
 

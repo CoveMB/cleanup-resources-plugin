@@ -114,11 +114,20 @@ def _overlap(first, second):
     return _inside(first, second) or _inside(second, first)
 
 
-def _evidence_conflict(first, second, *, filesystem_targets_only=False):
-    return any(_inside(Path(reference["path"]), Path(target["path"]))
-               for candidate, target in ((first, second), (second, first))
-               if not filesystem_targets_only or target.get("operation", "directory-remove") in {"directory-remove", "git-worktree-remove", "file-remove"}
-               for reference in candidate.get("references", {}).values())
+def _evidence_conflict(first, second, *, filesystem_targets_only=False, npm_effects=False):
+    for candidate, target in ((first, second), (second, first)):
+        native_cache = npm_effects and target.get("operation") == "npm-cache-remove" and "native" in target
+        if native_cache:
+            from .npm_cache import effect_paths
+            paths = effect_paths(target["native"]["resource"])
+        elif filesystem_targets_only and target.get("operation", "directory-remove") not in {"directory-remove", "git-worktree-remove", "file-remove"}:
+            continue
+        else:
+            paths = (Path(target["path"]),)
+        if any(_inside(Path(reference["path"]), path)
+               for reference in candidate.get("references", {}).values() for path in paths):
+            return True
+    return False
 
 
 def _reference(identifier, references, target, observed, deadline, *, limit=DOCUMENT_LIMIT, cancelled=None):
@@ -436,11 +445,16 @@ def _assess(row, specification, references, snapshot, historical, deadline, *, c
     payloads = {}
     evidence_bytes = 0
 
+    def check_stage():
+        if cancelled is not None and cancelled():
+            raise KeyboardInterrupt
+        if generated and time.monotonic() >= deadline:
+            raise _AssessmentUnresolved("generated evidence inspection time limit")
+
     def reference(identifier):
         nonlocal evidence_bytes
         try:
-            if cancelled is not None and cancelled():
-                raise KeyboardInterrupt
+            check_stage()
             if identifier not in checked:
                 payloads[identifier], checked[identifier] = _reference(identifier, references, Path(row["path"]), observed, deadline,
                     limit=65536 - evidence_bytes if generated else DOCUMENT_LIMIT, cancelled=cancelled)
@@ -452,6 +466,7 @@ def _assess(row, specification, references, snapshot, historical, deadline, *, c
             raise _AssessmentUnresolved("referenced evidence unavailable or unsafe") from None
 
     def basis(claim, missing_reason):
+        check_stage()
         identifiers = claim.get("basis", [])
         if not identifiers:
             raise _AssessmentUnresolved(missing_reason)
@@ -462,8 +477,7 @@ def _assess(row, specification, references, snapshot, historical, deadline, *, c
     try:
         content = specification.get("content", {})
         if generated:
-            if time.monotonic() >= deadline:
-                raise _AssessmentUnresolved("generated evidence inspection time limit")
+            check_stage()
             closure = set()
             for claim in [content, specification["recovery"], specification.get("consumer_scope", {}), specification.get("release", {}),
                           *consumers, *specification.get("findings", [])]:
@@ -567,10 +581,12 @@ def _assess(row, specification, references, snapshot, historical, deadline, *, c
             unresolved_reason = "accepted-loss decision source unavailable or invalid UTF-8"
             if decision["quote"] not in reference(decision["source_reference"]).decode("utf-8"):
                 raise _AssessmentUnresolved("accepted-loss quote not present in attributed source")
+            check_stage()
             if decision["binding_digest"] != row["accepted_loss"]["binding_digest"]:
                 raise _AssessmentUnresolved("accepted-loss decision binding differs from current inspection/loss")
             row["accepted_loss"].update({key: decision[key] for key in ("source_reference", "source_kind", "locator", "actor", "occurred_at")})
             row["accepted_loss"]["decision_digest"] = digest(decision)
+            check_stage()
         row.update(assessment="Eligible", reason="complete current inspection and assessed generated-output loss; no independent baseline" if generated
                    else "complete comparison and evidence-backed content/use/release/recovery assessment")
     except _AssessmentUnresolved as error:
@@ -965,7 +981,7 @@ def freeze_review(report, assessment, manifest, holds, exclusions, limits):
             row.update(assessment="Keep", reason="exact file overlaps retained native repository/recovery state")
         elif row in filesystem and any(other is not row and _overlap(Path(row["path"]), Path(other["path"])) for other in filesystem):
             row.update(assessment="Review", reason="overlapping eligible targets; require a narrower plan")
-        elif any(other is not row and _evidence_conflict(row, other, filesystem_targets_only=v5) for other in eligible):
+        elif any(other is not row and _evidence_conflict(row, other, filesystem_targets_only=v5, npm_effects=v5 and assessment["schema_version"] == 6) for other in eligible):
             row.update(assessment="Review", reason="eligible targets contain another candidate's evidence or rebuild inputs; require a narrower plan")
     for row in report["candidates"]:
         if row["assessment"] != "Eligible" and "accepted_loss" in row:
@@ -1096,6 +1112,10 @@ def validate_selection(plan, selected_ids, *, host=None):
         if any(_inside(Path(reference["path"]), Path(target["path"]))
                for reference in row.get("references", {}).values() for target in selected if not is_docker(target) and not is_npm_cache(target)):
             raise ValueError("selected batch contains required evidence/rebuild inputs")
+    if plan["schema_version"] == 6 and any(
+            _evidence_conflict(row, cache, filesystem_targets_only=True, npm_effects=True)
+            for row in selected for cache in selected if is_npm_cache(cache)):
+        raise ValueError("selected native cache effects contain required evidence/rebuild inputs")
     if plan["schema_version"] in (2, 3, 4, 5, 6):
         context = plan["review_context"]
         if context["mode"] in {"task", "project"} and any(

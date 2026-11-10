@@ -651,6 +651,18 @@ class AssessedPlans(unittest.TestCase):
 
 
 
+    def test_legacy_freeze_default_assessment_keeps_ordinary_rows(self):
+        # v6-only effect mapping must not dereference a missing assessment in
+        # the shared legacy/default freeze path.
+        owner=self.owner();report=owner.review_scope(self.project,assessment=self.assessment)
+        eligible=[row['id'] for row in report['candidates'] if row['assessment']=='Eligible']
+        self.assertEqual(len(eligible),3)
+        policy=report['plan']['policy']
+        owner.freeze_review(report,None,None,policy['holds'],policy['exclusions'],policy['limits'])
+        self.assertEqual(report['plan']['schema_version'],1)
+        self.assertEqual([row['id'] for row in report['candidates'] if row['assessment']=='Eligible'],eligible)
+        self.assertEqual(owner.validate_selection(report['plan'],eligible),[row for row in report['candidates'] if row['assessment']=='Eligible'])
+
     def test_git_lineage_final_phase_preserves_review(self):
         import test_git_inventory
         import devspace.git_inventory as inventory
