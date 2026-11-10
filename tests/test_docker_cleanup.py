@@ -651,6 +651,28 @@ class LegacyContainerContracts(unittest.TestCase):
                             for guard in guards: guard.assert_not_called()
                 self.assertEqual(self.preservation(fixture), before)
 
+        from test_generated_output import GeneratedOutputFixture
+        from devspace import exact_file
+        generated=GeneratedOutputFixture(); generated.setUp(); self.addCleanup(generated.doCleanups)
+        result=generated.reviewed(generated.decided()); generated_rows=generated.explicit(result)
+        _,historical,_,_,_,_=self.fixture(4)
+        container=historical['candidates'][0]
+        for output in generated_rows:
+            for selected in ([output,container],[container,output]):
+                frozen=copy.deepcopy(result['plan']); frozen['candidates']=selected
+                frozen['digest']=plans.digest({k:v for k,v in frozen.items() if k!='digest'})
+                plans.validate_selection(frozen,[r['id'] for r in selected])
+                for done in [*completed_rows,tuple(generated_rows)]:
+                    with self.subTest(version=6,operation=output['operation'],completed=done),ExitStack() as stack:
+                        guards=self.fail_acquisition(stack,batch=True)
+                        guards.append(stack.enter_context(patch.object(exact_file,'snapshot',side_effect=AssertionError('file snapshot before admission'))))
+                        guards.append(stack.enter_context(patch.object(exact_file,'observe',side_effect=AssertionError('completed file observation before admission'))))
+                        policy=stack.enter_context(patch.object(docker_cleanup,'require_removal_supported',wraps=docker_cleanup.require_removal_supported))
+                        with self.assertRaises(docker_cleanup._ContainerRemovalUnavailable) as refused:cleanup._revalidate(frozen,selected,None,None,None,done)
+                        self.assertEqual(str(refused.exception),REFUSAL_REASON)
+                        self.assertIn(('docker-container-remove',),[call.args for call in policy.call_args_list])
+                        for guard in guards:guard.assert_not_called()
+
     def test_unselected_legacy_container_does_not_block_supported_revalidation(self):
         for version in (3, 4):
             for companion in ["directory-remove", "docker-image-remove", "docker-cache-remove"] + (["npm-cache-remove"] if version == 4 else []):
@@ -725,6 +747,27 @@ class LegacyContainerContracts(unittest.TestCase):
                 patch.object(cleanup, "_snapshot", wraps=cleanup._snapshot) as snapshot:
             self.assertEqual(cleanup._revalidate(plan, selected, ap, None, None), selected)
         snapshot.assert_called_once()
+
+        from test_generated_output import GeneratedOutputFixture
+        from devspace import exact_file
+        generated=GeneratedOutputFixture();generated.setUp();self.addCleanup(generated.doCleanups)
+        output,unused,ap=generated.saved();_,historical,_,_,_,_=self.fixture(4)
+        container=historical['candidates'][0]
+        for candidate in generated.explicit(output):
+            for selected in ([candidate,container],[container,candidate]):
+                frozen=copy.deepcopy(output['plan']);frozen['candidates']=selected
+                frozen['digest']=plans.digest({k:v for k,v in frozen.items() if k!='digest'})
+                pp=generated.base/'docker-native-v6.json';pp.write_text(json.dumps(frozen));before=generated.survivors()
+                with ExitStack() as stack:
+                    stack.enter_context(patch.object(cleanup,'_state_path',return_value=generated.base/'state'))
+                    guards=self.fail_acquisition(stack)
+                    for owner,name in ((cleanup,'_confirm'),(cleanup,'_remove'),(exact_file,'snapshot'),(exact_file,'remove')):
+                        guards.append(stack.enter_context(patch.object(owner,name,side_effect=AssertionError('no later acquisition/effect'))))
+                    with self.assertRaises(docker_cleanup._ContainerRemovalUnavailable) as refused:cleanup.apply(pp,ap,[r['id'] for r in selected])
+                    self.assertEqual(str(refused.exception),REFUSAL_REASON)
+                    for guard in guards:guard.assert_not_called()
+                self.assertEqual(before,generated.survivors());self.assertFalse((generated.base/'state/pending.json').exists())
+                self.assertFalse(list((generated.base/'state').glob('*.intent.json')))
 
     def test_legacy_container_observe_retains_read_only_outcomes(self):
         fixture, plan, pp, ap, assessment, _ = self.fixture()

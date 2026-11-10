@@ -34,6 +34,22 @@ class GlobalCoverage(unittest.TestCase):
     def locations(self, report, kind):
         return [row for row in report["locations"] if row["kind"] == kind]
 
+    def test_generated_v6_unmatched_identity_and_finite_root_partition(self):
+        from test_generated_output import GeneratedOutputFixture
+        fixture=GeneratedOutputFixture();fixture.setUp();self.addCleanup(fixture.doCleanups)
+        document=fixture.decided()
+        outside=fixture.base/'outside-output';outside.write_bytes(b'outside scope')
+        spec=fixture.spec(outside,'file-remove');document['candidates'].append(spec)
+        config={'schema_version':1,'roots':[str(fixture.project)]}
+        result=plans.review_scope(config,mode='global',assessment=document)
+        unexamined=next(r for r in result['candidates'] if r['path']==str(outside))
+        self.assertEqual(unexamined['id'],plans.digest({'operation':'file-remove','path':str(outside)})[:16])
+        self.assertEqual(unexamined['operation'],'file-remove');self.assertEqual(unexamined['assessment'],'Keep')
+        self.assertEqual(unexamined['agent_assessment']['content_method'],'assessed-generated-output')
+        self.assertNotIn('observation',unexamined)
+        selected=fixture.explicit(result)[:2]
+        self.assertEqual(plans.validate_selection(result['plan'],[r['id'] for r in selected]),selected)
+
     def test_unconfigured_and_missing_coverage_never_become_zero_success(self):
         self.config["roots"].append(str(self.base / "missing"))
         report = self.review()

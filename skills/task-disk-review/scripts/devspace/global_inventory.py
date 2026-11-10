@@ -109,6 +109,9 @@ def review_global(config, *, assessment=None, manifest=None, holds=(), exclusion
     provider_paths = config.get("codex_worktrees", []) + config.get("package_storage", [])
     holds = list(holds) + config.get("holds", []) + provider_paths
     exclusions = list(exclusions) + config.get("exclusions", []) + provider_paths
+    if assessment["schema_version"] == 6:
+        holds = list(dict.fromkeys(os.path.abspath(value) for value in holds))
+        exclusions = list(dict.fromkeys(os.path.abspath(value) for value in exclusions))
     # Protect every configured root, including roots skipped as overlapping.
     configured_roots = [Path(os.path.abspath(path)) for path in config.get("roots", [])]
     report["scope_roots"] = list(dict.fromkeys([str(path) for path in configured_roots] + provider_paths))
@@ -249,12 +252,15 @@ def review_global(config, *, assessment=None, manifest=None, holds=(), exclusion
     for index, specification in enumerate(assessment["candidates"]):
         if index not in assigned:
             path = os.path.abspath(specification["path"])
-            file = assessment["schema_version"] == 5 and specification.get("operation") == "file-remove"
+            file = assessment["schema_version"] in (5, 6) and specification.get("operation") == "file-remove"
             identifier = plans.digest({"operation": "file-remove", "path": path})[:16] if file else plans.hashlib.sha256(os.fsencode(path)).hexdigest()[:16]
             if identifier in seen_candidates:
                 continue
             seen_candidates.add(identifier)
-            report["candidates"].append({**({"operation": "file-remove"} if file else {}), "id": identifier, "path": path,
+            generated = specification.get("content", {}).get("method") == "assessed-generated-output"
+            report["candidates"].append({**({"operation": "file-remove"} if file else {}),
+                **({"agent_assessment": {"content_method": "assessed-generated-output", "recovery_kind": "accepted-loss"},
+                    "specification_digest": plans.digest(specification)} if generated else {}), "id": identifier, "path": path,
                 "host": report["host"], "category": specification.get("category", "unknown"), "project": None,
                 "assessment": "Keep", "reason": "outside examined configured roots; never selected",
                 "effect": "report only; no removal authorized"})

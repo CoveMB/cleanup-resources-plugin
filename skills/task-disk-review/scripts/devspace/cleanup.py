@@ -159,7 +159,7 @@ class State:
 
 
 def _load_plan(path, selected_ids, all_eligible=False):
-    plan = plans.read_document(path, versions=(1, 2, 3, 4, 5))
+    plan = plans.read_document(path, versions=(1, 2, 3, 4, 5, 6))
     if set(plan) != PLAN_FIELDS or set(plan["review_context"]) != {"mode", "selected"}:
         raise ValueError("unsupported frozen plan; regenerate review with this helper")
     if all_eligible:
@@ -171,7 +171,7 @@ def _load_plan(path, selected_ids, all_eligible=False):
         if is_docker(row) or is_npm_cache(row):
             continue
         target = Path(row["path"])
-        native = plan["schema_version"] in (2, 3, 4, 5) and row.get("operation") == "git-worktree-remove"
+        native = plan["schema_version"] in (2, 3, 4, 5, 6) and row.get("operation") == "git-worktree-remove"
         if (any(plans._inside(Path(root), target) and not (native and plans._same_path(Path(root), target))
                 for root in plan["scope_roots"])
                 or any(plans._overlap(target, Path(root)) for root in (*plan["policy"]["holds"], *plan["policy"]["exclusions"]))):
@@ -184,9 +184,11 @@ def _confirm(plan, selected):
         raise ValueError("use your own interactive terminal; piped input refused")
     binding = {"plan_digest": plan["digest"], "host": plan["host"],
                "targets": [{key: row[key] for key in ("id", "path", "effect", "preconditions", "observation")} for row in selected]}
-    if plan["schema_version"] in (2, 3, 4, 5):
+    if plan["schema_version"] in (2, 3, 4, 5, 6):
         for displayed, row in zip(binding["targets"], selected):
             displayed["operation"] = row["operation"]
+            if "accepted_loss" in row:
+                displayed["accepted_loss"] = row["accepted_loss"]
             if row["operation"] == "git-worktree-remove":
                 displayed["native"] = {key: row["native"][key] for key in
                                        ("repository", "common_directory", "head", "retained_ref")}
@@ -233,7 +235,23 @@ def _revalidate(plan, selected, assessment_path, manifest_path, config_path, com
             from .git_worktree import observe
             if observe(row) != "absent-and-unregistered-branch-retained":
                 raise ValueError("completed worktree recovery/registration changed; remaining actions stopped")
-    assessment = plans.read_document(assessment_path, versions=(1, 2, 3, 4, 5))
+    # Completed outputs cannot be requalified after removal. Their bound sources
+    # must nevertheless remain unchanged before any later selected effect.
+    for row in completed:
+        generated = (row.get("comparison") or {}).get("method") == "assessed-generated-output"
+        remaining = 65536 if generated else plans.DOCUMENT_LIMIT
+        if generated and len(row.get("references", {})) > 16:
+            raise ValueError("completed candidate evidence exceeds generated bounds; remaining actions stopped")
+        for reference in row.get("references", {}).values():
+            try:
+                data, identity = plans._read_file(reference["path"], limit=remaining if generated else plans.DOCUMENT_LIMIT)
+                if generated:
+                    remaining -= len(data)
+                if identity != reference["identity"] or hashlib.sha256(data).hexdigest() != reference["sha256"]:
+                    raise ValueError("changed")
+            except (OSError, ValueError):
+                raise ValueError("completed candidate evidence changed/unavailable; remaining actions stopped") from None
+    assessment = plans.read_document(assessment_path, versions=(1, 2, 3, 4, 5, 6))
     manifest = plans.read_document(manifest_path) if manifest_path else None
     if plans.digest(assessment) != plan["assessment_digest"] or plans.digest(manifest) != plan["manifest_digest"]:
         raise ValueError("original assessment/consumer/retention inputs changed")
@@ -251,7 +269,7 @@ def _revalidate(plan, selected, assessment_path, manifest_path, config_path, com
     elif config_path or context["mode"] not in {"task", "project"}:
         raise ValueError("unsupported review context")
     review_assessment = assessment
-    if plan["schema_version"] in (3, 4, 5):
+    if plan["schema_version"] in (3, 4, 5, 6):
         review_assessment = {**assessment, "candidates": [row for row in assessment["candidates"] if not is_docker(row) and not is_npm_cache(row)]}
     report = plans.review_scope(selected_scope, mode=context["mode"], assessment=review_assessment, manifest=manifest,
                                 holds=plan["policy"]["holds"], exclusions=plan["policy"]["exclusions"],
@@ -260,7 +278,7 @@ def _revalidate(plan, selected, assessment_path, manifest_path, config_path, com
     if report["cancelled"] or report["invalid_scope"]:
         raise ValueError("current assessment unavailable or cancelled")
     current = report["plan"]
-    if plan["schema_version"] in (2, 3, 4, 5) and (current["schema_version"] != plan["schema_version"] or current["policy"] != plan["policy"]):
+    if plan["schema_version"] in (2, 3, 4, 5, 6) and (current["schema_version"] != plan["schema_version"] or current["policy"] != plan["policy"]):
         raise ValueError("unknown or changed typed policy")
     removed = {row["path"] for row in completed if row.get("operation") == "git-worktree-remove"}
     expected_roots = [root for root in plan["scope_roots"] if root not in removed]
@@ -288,7 +306,7 @@ def _revalidate(plan, selected, assessment_path, manifest_path, config_path, com
         new = rows.get(old["id"])
         if new is None or new["assessment"] != "Eligible":
             raise ValueError("selected candidate no longer eligible")
-        if plan["schema_version"] in (2, 3, 4, 5):
+        if plan["schema_version"] in (2, 3, 4, 5, 6):
             expected = dict(old)
             native = old["operation"] == "git-worktree-remove"
             if native:
@@ -504,12 +522,14 @@ def _warnings(plan):
     if plan["schema_version"] == 1:
         return WARNINGS
     warnings = [*WARNINGS, "Native Git removal retains branches; ignored data has no automatic undo. Refusal/timeout stops the batch; reconcile without retry."]
-    if plan["schema_version"] in (3, 4, 5):
+    if plan["schema_version"] in (3, 4, 5, 6):
         warnings.append("Docker estimates are daemon/shared storage, separate from observed host filesystem change. No volume removal or VM compaction; native timeout leaves unknown effects.")
-    if plan["schema_version"] in (4, 5):
+    if plan["schema_version"] in (4, 5, 6):
         warnings.append("Npm removal can require later downloads/network and increase build cost; no offline recovery or universal undo. Shared aliases are protected.")
-    if plan["schema_version"] == 5:
+    if plan["schema_version"] in (5, 6):
         warnings.append("Exact regular-file unlink preserves its parent and siblings; retained inputs are required for rebuild. Same-account races remain possible; no undo.")
+    if any((row.get("comparison") or {}).get("method") == "assessed-generated-output" for row in plan["candidates"]):
+        warnings.append("Generated output uses complete current inspection with no independent baseline or rebuild guarantee; attributed human loss is an investigator interpretation, not authenticated authority.")
     return warnings
 
 
@@ -535,6 +555,8 @@ def _target_record(row, outcome):
             target["file_binding_digest"] = plans.digest(row["observation"]["file_binding"])
         if row["operation"] == "git-worktree-remove":
             target["native_identity_digest"] = plans.digest(row["native"])
+    if (row.get("comparison") or {}).get("method") == "assessed-generated-output":
+        target["accepted_loss_digest"] = plans.digest(row["accepted_loss"])
     return target
 
 
@@ -582,7 +604,7 @@ def apply(plan_path, assessment_path, selected_ids, *, all_eligible=False, manif
     # No public confirmation callback/flag/receipt parameter.
     with State([row["native"]["resource"]["cache"] if is_npm_cache(row) and "native" in row else row["path"]
                 for row in plan["candidates"] if not is_docker(row)
-                and (plan["schema_version"] != 5 or not is_npm_cache(row) or "native" in row)] + plan["scope_roots"]) as state:
+                and (plan["schema_version"] not in (5, 6) or not is_npm_cache(row) or "native" in row)] + plan["scope_roots"]) as state:
         if state.read("pending.json") is not None:
             raise ValueError("interrupted operation pending; reconcile with its original plan before new review/confirmation")
         _revalidate(plan, selected, assessment_path, manifest_path, config_path)
@@ -612,10 +634,10 @@ def apply(plan_path, assessment_path, selected_ids, *, all_eligible=False, manif
                 elif is_docker(row):
                     from .docker_cleanup import remove
                     remove(current_rows[0], plan["policy"]["limits"])
-                elif plan["schema_version"] == 5 and row["operation"] == "file-remove":
+                elif plan["schema_version"] in (5, 6) and row["operation"] == "file-remove":
                     from .exact_file import remove
                     remove(current_rows[0], plan["policy"]["limits"])
-                elif plan["schema_version"] in (2, 3, 4, 5) and row["operation"] == "git-worktree-remove":
+                elif plan["schema_version"] in (2, 3, 4, 5, 6) and row["operation"] == "git-worktree-remove":
                     from .git_worktree import remove
                     remove(current_rows[0], plan["policy"]["limits"])
                 else:
@@ -639,17 +661,17 @@ def apply(plan_path, assessment_path, selected_ids, *, all_eligible=False, manif
 def reconcile(plan_path):
     """Inspect interrupted identities only. Never continue or retry deletion."""
     _capabilities()
-    plan = plans.read_document(plan_path, versions=(1, 2, 3, 4, 5))
+    plan = plans.read_document(plan_path, versions=(1, 2, 3, 4, 5, 6))
     if set(plan) != PLAN_FIELDS or plan["digest"] != plans.digest({key: value for key, value in plan.items() if key != "digest"}):
         raise ValueError("original frozen plan required")
     with State([row["native"]["resource"]["cache"] if is_npm_cache(row) and "native" in row else row["path"]
                 for row in plan["candidates"] if not is_docker(row)
-                and (plan["schema_version"] != 5 or not is_npm_cache(row) or "native" in row)] + plan["scope_roots"]) as state:
+                and (plan["schema_version"] not in (5, 6) or not is_npm_cache(row) or "native" in row)] + plan["scope_roots"]) as state:
         pending = state.read("pending.json")
         if pending is None or plan["host"] != plans.new_report("", None, {})["host"]:
             raise ValueError("no matching same-host pending operation")
         intent = _validated_intent(state, pending, plan)
-        if plan["schema_version"] in (2, 3, 4, 5):
+        if plan["schema_version"] in (2, 3, 4, 5, 6):
             plans.validate_selection(plan, [target["id"] for target in intent["targets"]])
         rows = {row["id"]: row for row in plan["candidates"]}
         observed = []
@@ -663,11 +685,11 @@ def reconcile(plan_path):
                 from .docker_cleanup import observe
                 observed.append({**target, "outcome": observe(row)})
                 continue
-            if plan["schema_version"] in (2, 3, 4, 5) and row.get("operation") == "git-worktree-remove":
+            if plan["schema_version"] in (2, 3, 4, 5, 6) and row.get("operation") == "git-worktree-remove":
                 from .git_worktree import observe
                 observed.append({**target, "outcome": observe(row)})
                 continue
-            if plan["schema_version"] == 5 and row.get("operation") == "file-remove":
+            if plan["schema_version"] in (5, 6) and row.get("operation") == "file-remove":
                 from .exact_file import observe
                 observed.append({**target, "outcome": observe(row)})
                 continue

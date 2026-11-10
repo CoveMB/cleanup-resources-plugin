@@ -1,5 +1,6 @@
 """Shared assessed review/frozen data contract. Contains no execution or approval."""
 import hashlib
+from datetime import datetime
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -50,35 +51,43 @@ def _open_parent(path):
         raise
 
 
-def _read_file(path, limit=DOCUMENT_LIMIT, deadline=None):
+def _read_file(path, limit=DOCUMENT_LIMIT, deadline=None, *, cancelled=None):
     """Open selected references through no-follow ancestors; never return raw errors."""
-    path = Path(os.path.abspath(os.fspath(path)))
-    if any(protection(component)[1] for component in path.parts):
-        raise ValueError("protected input path; payload not read")
-    descriptor = _open_parent(path)
     try:
-        file_descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor)
+        if cancelled is not None and cancelled():
+            raise KeyboardInterrupt
+        path = Path(os.path.abspath(os.fspath(path)))
+        if any(protection(component)[1] for component in path.parts):
+            raise ValueError("protected input path; payload not read")
+        descriptor = _open_parent(path)
         try:
-            before = os.fstat(file_descriptor)
-            if not stat.S_ISREG(before.st_mode) or before.st_size > limit:
-                raise ValueError("reference must be a bounded regular file")
-            data = bytearray()
-            while True:
-                if deadline is not None and time.monotonic() >= deadline:
-                    raise ValueError("reference inspection time limit")
-                chunk = os.read(file_descriptor, min(65536, limit - len(data) + 1))
-                if not chunk:
-                    break
-                data.extend(chunk)
-                if len(data) > limit:
-                    raise ValueError("reference byte limit")
-            if file_identity(before) != file_identity(os.fstat(file_descriptor)):
-                raise _AssessmentUnresolved("reference changed during inspection")
-            return bytes(data), file_identity(before)
+            file_descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor)
+            try:
+                before = os.fstat(file_descriptor)
+                if not stat.S_ISREG(before.st_mode) or before.st_size > limit:
+                    raise ValueError("reference must be a bounded regular file")
+                data = bytearray()
+                while True:
+                    if cancelled is not None and cancelled():
+                        raise KeyboardInterrupt
+                    if deadline is not None and time.monotonic() >= deadline:
+                        raise ValueError("reference inspection time limit")
+                    chunk = os.read(file_descriptor, min(65536, limit - len(data) + 1))
+                    if not chunk:
+                        break
+                    data.extend(chunk)
+                    if len(data) > limit:
+                        raise ValueError("reference byte limit")
+                if file_identity(before) != file_identity(os.fstat(file_descriptor)) or len(data) != before.st_size:
+                    raise _AssessmentUnresolved("reference changed during inspection")
+                return bytes(data), file_identity(before)
+            finally:
+                os.close(file_descriptor)
         finally:
-            os.close(file_descriptor)
+            os.close(descriptor)
     finally:
-        os.close(descriptor)
+        if cancelled is not None and cancelled():
+            raise KeyboardInterrupt
 
 
 def read_document(path, *, versions=(1,)):
@@ -112,20 +121,26 @@ def _evidence_conflict(first, second, *, filesystem_targets_only=False):
                for reference in candidate.get("references", {}).values())
 
 
-def _reference(identifier, references, target, observed, deadline):
-    reference = references[identifier]
-    if set(reference) != {"path", "sha256"}:
-        raise ValueError("reference requires exact path and sha256")
-    path = Path(os.path.abspath(reference["path"]))
-    if _inside(path, target) or any(protection(part)[1] for part in path.parts):
-        raise ValueError("protected or self-referential evidence")
-    data, identity = _read_file(path, deadline=deadline)
-    if any(identity["device"] == entry.get("device") and identity["inode"] == entry.get("inode")
-           for entry in observed):
-        raise ValueError("self-reference hardlink alias")
-    if hashlib.sha256(data).hexdigest() != reference["sha256"]:
-        raise _AssessmentUnresolved("reference digest changed")
-    return data, {"path": str(path), "sha256": reference["sha256"], "identity": identity}
+def _reference(identifier, references, target, observed, deadline, *, limit=DOCUMENT_LIMIT, cancelled=None):
+    try:
+        if cancelled is not None and cancelled():
+            raise KeyboardInterrupt
+        reference = references[identifier]
+        if set(reference) != {"path", "sha256"}:
+            raise ValueError("reference requires exact path and sha256")
+        path = Path(os.path.abspath(reference["path"]))
+        if _inside(path, target) or any(protection(part)[1] for part in path.parts):
+            raise ValueError("protected or self-referential evidence")
+        data, identity = _read_file(path, limit=limit, deadline=deadline, cancelled=cancelled)
+        if any(identity["device"] == entry.get("device") and identity["inode"] == entry.get("inode")
+               for entry in observed):
+            raise ValueError("self-reference hardlink alias")
+        if hashlib.sha256(data).hexdigest() != reference["sha256"]:
+            raise _AssessmentUnresolved("reference digest changed")
+        return data, {"path": str(path), "sha256": reference["sha256"], "identity": identity}
+    finally:
+        if cancelled is not None and cancelled():
+            raise KeyboardInterrupt
 
 
 def _entries(snapshot):
@@ -172,6 +187,64 @@ def _validate_assessment(assessment):
     """Shape/bounds only. This deliberately does not evaluate source prose."""
     if not isinstance(assessment, dict) or type(assessment.get("schema_version")) is not int:
         raise ValueError("assessment version must be an integer")
+    if assessment["schema_version"] != 6 and any(
+            isinstance(candidate, dict) and isinstance(candidate.get("content", {}), dict) and candidate.get("content", {}).get("method") == "assessed-generated-output"
+            for candidate in (assessment.get("candidates", []) if isinstance(assessment.get("candidates"), list) else [])):
+        raise ValueError("generated-output method requires assessment version 6")
+    if assessment["schema_version"] == 6:
+        if (set(assessment) != {"schema_version", "references", "candidates"}
+                or not isinstance(assessment["candidates"], list) or len(assessment["candidates"]) > MAX_CANDIDATES):
+            raise ValueError("unsupported version 6 assessment")
+        generated, ordinary = [], []
+        for candidate in assessment["candidates"]:
+            if not isinstance(candidate, dict):
+                raise ValueError("candidate must be an object")
+            content = candidate.get("content", {})
+            if not isinstance(content, dict) or content.get("method") != "assessed-generated-output":
+                ordinary.append(candidate)
+                continue
+            allowed = {"operation", "path", "category", "purpose", "content", "recovery", "consumers",
+                       "consumer_scope", "release", "findings", "observed_tree_digest"}
+            recovery = candidate.get("recovery", {})
+            if (set(candidate) - allowed or candidate.get("operation") not in {"file-remove", "directory-remove"}
+                    or candidate.get("category") != "output"
+                    or set(content) != {"method", "basis", "explanation"}
+                    or not isinstance(content["explanation"], str) or not content["explanation"].strip() or len(content["explanation"]) > 4096
+                    or not content["basis"] or not isinstance(recovery, dict)
+                    or set(recovery) not in ({"kind", "basis", "explanation"}, {"kind", "basis", "explanation", "decision"})
+                    or recovery.get("kind") != "accepted-loss" or not recovery.get("basis")
+                    or not isinstance(recovery.get("explanation"), str) or not recovery["explanation"].strip() or len(recovery["explanation"]) > 1024):
+                raise ValueError("unsupported generated-output assessment")
+            if "decision" in recovery:
+                decision = recovery["decision"]
+                bounds = {"binding_digest": 64, "source_reference": 128, "source_kind": 32,
+                          "locator": 512, "actor": 128, "occurred_at": 20, "quote": 4096}
+                if (not isinstance(decision, dict) or set(decision) != set(bounds)
+                        or any(not isinstance(decision[key], str) or not decision[key].strip() or len(decision[key]) > bound for key, bound in bounds.items())
+                        or len(decision["binding_digest"]) != 64 or any(c not in "0123456789abcdef" for c in decision["binding_digest"])
+                        or decision["source_kind"] not in {"conversation-user-turn", "human-authored-record"}):
+                    raise ValueError("unsupported attributed loss decision")
+                try:
+                    parsed = datetime.strptime(decision["occurred_at"], "%Y-%m-%dT%H:%M:%SZ")
+                    if parsed.strftime("%Y-%m-%dT%H:%M:%SZ") != decision["occurred_at"]:
+                        raise ValueError
+                except ValueError:
+                    raise ValueError("invalid attributed decision UTC time") from None
+            projection = {key: value for key, value in candidate.items() if key != "operation"}
+            projection["content"] = {key: content[key] for key in ("basis", "explanation")}
+            projection["recovery"] = {key: value for key, value in recovery.items() if key != "decision"}
+            generated.append(projection)
+        _validate_assessment({**assessment, "schema_version": 1, "candidates": generated})
+        _validate_assessment({**assessment, "schema_version": 5, "candidates": ordinary})
+        for candidate in assessment["candidates"]:
+            if candidate.get("content", {}).get("method") == "assessed-generated-output":
+                identifiers = []
+                for claim in [candidate["content"], candidate["recovery"], candidate.get("consumer_scope", {}), candidate.get("release", {}),
+                              *candidate.get("consumers", []), *candidate.get("findings", [])]:
+                    identifiers.extend(claim.get("basis", []))
+                if any(not identifier.strip() or len(identifier) > 128 for identifier in identifiers):
+                    raise ValueError("unsupported generated evidence ID")
+        return
     if assessment["schema_version"] == 5:
         if set(assessment) != {"schema_version", "references", "candidates"} or not isinstance(assessment["candidates"], list) or len(assessment["candidates"]) > MAX_CANDIDATES:
             raise ValueError("unsupported version 5 assessment")
@@ -265,7 +338,67 @@ def _validate_assessment(assessment):
             strings(finding.get("basis", []))
 
 
-def _assess(row, specification, references, snapshot, historical, deadline):
+def _generated_output_binding(row: dict, loss_summary: str) -> str:
+    observation = row["observation"]
+    return digest({"method": "assessed-generated-output", "operation": row["operation"], "path": row["path"], "host": row["host"],
+                   **{key: observation[key] for key in ("identity", "tree_digest", "tree_identity_digest", "file_count", "filesystem_local")},
+                   "file_binding": observation.get("file_binding") if row["operation"] == "file-remove" else None,
+                   "effect": row["effect"], "loss_summary": loss_summary})
+
+
+def _validate_generated_output_row(row: dict) -> None:
+    comparison = {"method": "assessed-generated-output", "independent_baseline": False,
+                  "provenance": "agent interpreted; not mechanically certified"}
+    loss = row.get("accepted_loss", {})
+    observation = row.get("observation", {})
+    fields = {"binding_digest", "loss_summary", "decision_digest", "source_reference", "source_kind", "locator", "actor", "occurred_at"}
+    from .exact_file import EFFECTS
+    effect = EFFECTS["accepted-loss"] if row.get("operation") == "file-remove" else "permanent removal of this exact directory; accepted loss, no undo promised"
+    if (row.get("operation") not in {"file-remove", "directory-remove"} or row.get("category") != "output" or "native" in row
+            or row.get("comparison") != comparison or row["comparison"].get("independent_baseline") is not False
+            or row.get("agent_assessment", {}).get("content_method") != comparison["method"]
+            or row.get("agent_assessment", {}).get("recovery_kind") != "accepted-loss" or row.get("effect") != effect
+            or not isinstance(loss, dict) or set(loss) != fields
+            or observation.get("complete") is not True or observation.get("filesystem_local") is not True
+            or not row.get("host", {}).get("identity") or not observation.get("identity")
+            or not isinstance(row.get("path"), str) or row["path"] != os.path.abspath(row["path"])):
+        raise ValueError("invalid generated-output frozen row")
+    for key, bound in {"loss_summary": 1024, "source_reference": 128, "source_kind": 32, "locator": 512, "actor": 128, "occurred_at": 20}.items():
+        if not isinstance(loss[key], str) or not loss[key].strip() or len(loss[key]) > bound:
+            raise ValueError("invalid generated-output attribution")
+    for value in (loss["binding_digest"], loss["decision_digest"], observation.get("tree_digest"), observation.get("tree_identity_digest")):
+        if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
+            raise ValueError("invalid generated-output digest")
+    try:
+        parsed = datetime.strptime(loss["occurred_at"], "%Y-%m-%dT%H:%M:%SZ")
+        if parsed.strftime("%Y-%m-%dT%H:%M:%SZ") != loss["occurred_at"]:
+            raise ValueError
+    except ValueError:
+        raise ValueError("invalid generated-output UTC time") from None
+    if (loss["source_kind"] not in {"conversation-user-turn", "human-authored-record"}
+            or loss["source_reference"] not in row.get("references", {})
+            or loss["binding_digest"] != _generated_output_binding(row, loss["loss_summary"])):
+        raise ValueError("changed generated-output loss binding/source")
+    if row["operation"] == "directory-remove":
+        if (set(observation) != {"complete", "identity", "tree_digest", "tree_identity_digest", "file_count", "filesystem_local", "size", "coverage"}
+                or not stat.S_ISDIR(observation["identity"].get("mode", 0))
+                or type(observation["file_count"]) is not int or observation["file_count"] < 0
+                or observation["coverage"].get("complete") is not True or observation["size"].get("complete") is not True):
+            raise ValueError("incomplete generated directory observation")
+        identity, size, coverage = observation["identity"], observation["size"], observation["coverage"]
+        if (set(identity) != {"device", "inode", "mode", "size", "mtime_ns", "ctime_ns"}
+                or any(type(value) is not int for value in identity.values())
+                or set(size) != {"logical_bytes", "allocated_bytes", "known_allocated_bytes", "unique_files", "duplicate_hardlinks", "complete"}
+                or any(type(size[key]) is not int or size[key] < 0 for key in ("logical_bytes", "known_allocated_bytes", "unique_files", "duplicate_hardlinks"))
+                or size["allocated_bytes"] is not None and (type(size["allocated_bytes"]) is not int or size["allocated_bytes"] < 0)
+                or set(coverage) != {"examined", "skipped", "inaccessible", "complete", "stop_reason"}
+                or type(coverage["examined"]) is not int or coverage["examined"] < 0
+                or any(type(coverage[key]) is not int or coverage[key] != 0 for key in ("skipped", "inaccessible"))
+                or coverage["stop_reason"] is not None):
+            raise ValueError("unsupported generated directory identity/accounting/coverage")
+
+
+def _assess(row, specification, references, snapshot, historical, deadline, *, cancelled=None):
     """Mechanical gates plus explicitly attributed agent evidence interpretation.
 
     Reference hashes cannot adjudicate semantic truth or fabricated provenance.
@@ -295,14 +428,23 @@ def _assess(row, specification, references, snapshot, historical, deadline):
     if not snapshot.get("filesystem_local") or not row["host"].get("identity"):
         row.update(assessment="Unavailable", reason="execution host or local filesystem boundary unsupported/unknown")
         return
+    generated = specification.get("content", {}).get("method") == "assessed-generated-output"
+    if generated:
+        row["agent_assessment"]["interpretation"] = "investigator interpreted provenance/purpose/use/release/loss; helper does not certify source meaning or rebuildability"
     observed = [entry.get("identity", {}) for entry in snapshot["entries"]]
     checked = {}
     payloads = {}
+    evidence_bytes = 0
 
     def reference(identifier):
+        nonlocal evidence_bytes
         try:
+            if cancelled is not None and cancelled():
+                raise KeyboardInterrupt
             if identifier not in checked:
-                payloads[identifier], checked[identifier] = _reference(identifier, references, Path(row["path"]), observed, deadline)
+                payloads[identifier], checked[identifier] = _reference(identifier, references, Path(row["path"]), observed, deadline,
+                    limit=65536 - evidence_bytes if generated else DOCUMENT_LIMIT, cancelled=cancelled)
+                evidence_bytes += len(payloads[identifier])
             return payloads[identifier]
         except _AssessmentUnresolved:
             raise
@@ -319,9 +461,32 @@ def _assess(row, specification, references, snapshot, historical, deadline):
     unresolved_reason = "independent content baseline invalid or incomplete"
     try:
         content = specification.get("content", {})
+        if generated:
+            if time.monotonic() >= deadline:
+                raise _AssessmentUnresolved("generated evidence inspection time limit")
+            closure = set()
+            for claim in [content, specification["recovery"], specification.get("consumer_scope", {}), specification.get("release", {}),
+                          *consumers, *specification.get("findings", [])]:
+                closure.update(claim.get("basis", []))
+            decision = specification["recovery"].get("decision")
+            if decision:
+                closure.add(decision["source_reference"])
+            if len(closure) > 16 or not closure <= references.keys():
+                raise _AssessmentUnresolved("generated evidence closure missing or exceeds 16 distinct IDs")
         basis(content, "content provenance evidence missing")
         actual = _entries(snapshot)
-        if content.get("method") == "inventory":
+        if generated:
+            row["comparison"] = {"method": "assessed-generated-output", "independent_baseline": False,
+                                 "provenance": "agent interpreted; not mechanically certified"}
+            recovery = specification["recovery"]
+            if row.get("operation") == "file-remove":
+                from .exact_file import EFFECTS
+                row["effect"] = EFFECTS["accepted-loss"]
+            else:
+                row["effect"] = "permanent removal of this exact directory; accepted loss, no undo promised"
+            row["accepted_loss"] = {"binding_digest": _generated_output_binding(row, recovery["explanation"]),
+                                    "loss_summary": recovery["explanation"]}
+        elif content.get("method") == "inventory":
             if "reference" not in content:
                 raise _AssessmentUnresolved("independent content baseline missing or unsupported")
             expected = json.loads(reference(content["reference"]), object_pairs_hook=_unique_keys)
@@ -340,10 +505,11 @@ def _assess(row, specification, references, snapshot, historical, deadline):
             expected = _expected_entries(expected)
         else:
             raise _AssessmentUnresolved("independent content baseline missing or unsupported")
-        row["comparison"] = {"method": content["method"], "matched": expected == actual,
-                             "provenance": "agent interpreted; not mechanically certified"}
-        if expected != actual:
-            raise _AssessmentUnresolved("extra, missing, modified or differently typed target contents")
+        if not generated:
+            row["comparison"] = {"method": content["method"], "matched": expected == actual,
+                                 "provenance": "agent interpreted; not mechanically certified"}
+            if expected != actual:
+                raise _AssessmentUnresolved("extra, missing, modified or differently typed target contents")
         unresolved_reason = "recovery evidence unresolved"
         recovery = specification.get("recovery", {})
         basis(recovery, "recovery evidence missing")
@@ -392,13 +558,31 @@ def _assess(row, specification, references, snapshot, historical, deadline):
             raise _AssessmentUnresolved("purpose/category/release checkpoint unresolved")
         if row.get("operation") == "file-remove" and row["category"] != "output":
             raise _AssessmentUnresolved("exact files require output category")
-        row.update(assessment="Eligible", reason="complete comparison and evidence-backed content/use/release/recovery assessment")
+        if generated:
+            if not specification["purpose"].strip() or not release["checkpoint"].strip():
+                raise _AssessmentUnresolved("purpose/category/release checkpoint unresolved")
+            decision = recovery.get("decision")
+            if not decision:
+                raise _AssessmentUnresolved("missing accepted-loss decision for current binding")
+            unresolved_reason = "accepted-loss decision source unavailable or invalid UTF-8"
+            if decision["quote"] not in reference(decision["source_reference"]).decode("utf-8"):
+                raise _AssessmentUnresolved("accepted-loss quote not present in attributed source")
+            if decision["binding_digest"] != row["accepted_loss"]["binding_digest"]:
+                raise _AssessmentUnresolved("accepted-loss decision binding differs from current inspection/loss")
+            row["accepted_loss"].update({key: decision[key] for key in ("source_reference", "source_kind", "locator", "actor", "occurred_at")})
+            row["accepted_loss"]["decision_digest"] = digest(decision)
+        row.update(assessment="Eligible", reason="complete current inspection and assessed generated-output loss; no independent baseline" if generated
+                   else "complete comparison and evidence-backed content/use/release/recovery assessment")
     except _AssessmentUnresolved as error:
         row.update(assessment="Review", reason=str(error))
     except (ValueError, KeyError, TypeError, OSError, UnicodeError, RecursionError):
         row.update(assessment="Review", reason=unresolved_reason)
     finally:
         row["references"] = checked
+        if cancelled is not None and cancelled():
+            raise KeyboardInterrupt
+        if generated and time.monotonic() >= deadline:
+            row.update(assessment="Unavailable", reason="generated evidence inspection time limit")
 
 
 def validate_manifest(manifest):
@@ -433,9 +617,9 @@ def review_scope(selected, *, npm_caches=(), git_lineage=None, **options):
         if options.get("mode", "task") not in {"project", "global"}:
             raise ValueError("Git lineage requires project or global review")
     assessment = options.get("assessment")
-    if assessment and assessment.get("schema_version") in (4, 5):
+    if assessment and assessment.get("schema_version") in (4, 5, 6):
         _validate_assessment(assessment)
-        remaining = {**assessment, "schema_version": 5 if assessment["schema_version"] == 5 else 3,
+        remaining = {**assessment, "schema_version": assessment["schema_version"] if assessment["schema_version"] in (5, 6) else 3,
                      "candidates": [row for row in assessment["candidates"] if not npm_cache.is_npm_cache(row)]}
         report = _review_docker_scope(selected, **{**options, "assessment": remaining})
         old = report["plan"]
@@ -443,7 +627,7 @@ def review_scope(selected, *, npm_caches=(), git_lineage=None, **options):
         for specification in assessment["candidates"]:
             if not npm_cache.is_npm_cache(specification):
                 continue
-            if assessment["schema_version"] == 5 and report["cancelled"]:
+            if assessment["schema_version"] in (5, 6) and report["cancelled"]:
                 row = npm_cache.review(specification, assessment["references"], report["host"],
                                        report["scope"]["canonical"], timeout=0,
                                        blocked="review cancelled; provider state unexamined")
@@ -536,20 +720,20 @@ def review_scope(selected, *, npm_caches=(), git_lineage=None, **options):
 def _review_docker_scope(selected, **options):
     """Version 3 adds separately typed provider rows; old producers stay intact."""
     assessment = options.get("assessment")
-    if not assessment or assessment.get("schema_version") not in (3, 5):
+    if not assessment or assessment.get("schema_version") not in (3, 5, 6):
         return _review_scope(selected, **options)
     from . import docker_cleanup
     _validate_assessment(assessment)
     started = time.monotonic()
     timeout = options.get("timeout", 10.0)
-    filesystem = {**assessment, "schema_version": 5 if assessment["schema_version"] == 5 else 2,
+    filesystem = {**assessment, "schema_version": assessment["schema_version"] if assessment["schema_version"] in (5, 6) else 2,
                   "candidates": [row for row in assessment["candidates"] if not docker_cleanup.is_docker(row)]}
     report = _review_scope(selected, **{**options, "assessment": filesystem})
     provider_ids = set()
     for specification in assessment["candidates"]:
         if not docker_cleanup.is_docker(specification):
             continue
-        if assessment["schema_version"] == 5 and report["cancelled"]:
+        if assessment["schema_version"] in (5, 6) and report["cancelled"]:
             row = docker_cleanup.review(specification, assessment["references"], report["host"],
                                         report["scope"]["canonical"], timeout=0,
                                         blocked="review cancelled; provider state unexamined")
@@ -655,12 +839,15 @@ def _review_scope(selected, *, mode="task", assessment=None, manifest=None, hold
                "purpose": specification.get("purpose"), "assessment": "Review", "reason": "not assessed",
                "effect": "report only; no removal authorized", "references": {}, "comparison": None,
                "preconditions": ["same host/target/content/evidence/consumer/release conditions", "new plan on material drift", "separate exact-plan human confirmation"]}
-        typed = assessment["schema_version"] in (2, 5)
+        typed = assessment["schema_version"] in (2, 5, 6)
         native = typed and specification["operation"] == "git-worktree-remove"
         if typed:
             row["operation"] = specification["operation"]
         if native or row.get("operation") == "file-remove":
             row["id"] = digest({"operation": row["operation"], "path": str(path)})[:16]
+        if specification.get("content", {}).get("method") == "assessed-generated-output":
+            row["agent_assessment"] = {"content_method": "assessed-generated-output", "recovery_kind": "accepted-loss"}
+            row["specification_digest"] = digest(specification)
         report["candidates"].append(row)
         if (not any(_inside(path, root) for root in roots) or (not native and any(_same_path(path, root) for root in roots)) or _same_path(path, Path.home())
                 or os.path.ismount(path) or any(_overlap(path, Path(os.path.abspath(value))) for value in (*holds, *exclusions))):
@@ -719,7 +906,9 @@ def _review_scope(selected, *, mode="task", assessment=None, manifest=None, hold
             row.update(assessment="Unavailable", reason="content inspection cancelled; remaining assessment unknown")
             break
         try:
-            _assess(row, specification, assessment["references"], snapshot, historical.get(str(path), {}), started + timeout)
+            _assess(row, specification, assessment["references"], snapshot, historical.get(str(path), {}), started + timeout, cancelled=cancelled)
+            if specification.get("content", {}).get("method") == "assessed-generated-output" and row["assessment"] == "Unavailable":
+                report["coverage"]["complete"] = False
         except KeyboardInterrupt:
             report["cancelled"] = True
             report["coverage"]["complete"] = False
@@ -766,7 +955,7 @@ def _review_scope(selected, *, mode="task", assessment=None, manifest=None, hold
 def freeze_review(report, assessment, manifest, holds, exclusions, limits):
     """Freeze the shared review contract; this never grants authorization."""
     eligible = [row for row in report["candidates"] if row["assessment"] == "Eligible"]
-    v5 = assessment is not None and assessment["schema_version"] == 5
+    v5 = assessment is not None and assessment["schema_version"] in (5, 6)
     filesystem = [row for row in eligible if not v5 or row.get("operation", "directory-remove") in {"directory-remove", "git-worktree-remove", "file-remove"}]
     for row in eligible:
         if v5 and row.get("operation") == "file-remove" and any(
@@ -778,7 +967,16 @@ def freeze_review(report, assessment, manifest, holds, exclusions, limits):
             row.update(assessment="Review", reason="overlapping eligible targets; require a narrower plan")
         elif any(other is not row and _evidence_conflict(row, other, filesystem_targets_only=v5) for other in eligible):
             row.update(assessment="Review", reason="eligible targets contain another candidate's evidence or rebuild inputs; require a narrower plan")
+    for row in report["candidates"]:
+        if row["assessment"] != "Eligible" and "accepted_loss" in row:
+            row["accepted_loss"] = {key: row["accepted_loss"][key] for key in ("binding_digest", "loss_summary")}
+    generated = any(row.get("comparison", {}).get("method") == "assessed-generated-output" for row in report["candidates"] if row.get("comparison"))
     report["limitations"][0] = "Discovery is metadata-only; separately assessed candidates include explicit bounded content comparison and agent interpretation."
+    if generated:
+        report["limitations"][0] = "Discovery is metadata-only; separately assessed candidates include bounded current inspection plus method-specific evidence and agent interpretation; generated output has no independent baseline."
+    if assessment and assessment["schema_version"] == 6 and report["scope"]["mode"] == "global":
+        holds = list(dict.fromkeys(os.path.abspath(value) for value in holds))
+        exclusions = list(dict.fromkeys(os.path.abspath(value) for value in exclusions))
     report["limitations"] = ["Reports contain metadata/digests, never inspected file payloads; inspect before sharing."
                              if item.startswith("Reports contain host and selected/relative path metadata;") else item
                              for item in report["limitations"]]
@@ -799,7 +997,7 @@ def freeze_review(report, assessment, manifest, holds, exclusions, limits):
             plan["scope_identities"][root] = {key: file_identity(metadata)[key] for key in ("device", "inode", "mode")}
         except OSError:
             plan["scope_identities"][root] = None
-    if plan["schema_version"] in (2, 3, 4, 5):
+    if plan["schema_version"] in (2, 3, 4, 5, 6):
         for row in plan["candidates"]:
             row.setdefault("operation", "directory-remove")
     plan["digest"] = digest(plan)
@@ -811,20 +1009,40 @@ def validate_selection(plan, selected_ids, *, host=None):
     """Validate frozen selection data only; any cleanup executor must independently revalidate current state."""
     payload = {key: value for key, value in plan.items() if key != "digest"}
     if (plan.get("digest") != digest(payload) or plan.get("kind") != "frozen-review-not-authorization"
-            or type(plan.get("schema_version")) is not int or plan.get("schema_version") not in (1, 2, 3, 4, 5)):
+            or type(plan.get("schema_version")) is not int or plan.get("schema_version") not in (1, 2, 3, 4, 5, 6)):
         raise ValueError("changed or unsupported frozen plan")
     if plan["host"] != (host or new_report("", None, {})["host"]):
         raise ValueError("execution host differs")
-    if plan["schema_version"] in (2, 3, 4, 5):
+    if plan["schema_version"] in (2, 3, 4, 5, 6):
         from .docker_cleanup import OPERATIONS
         from .npm_cache import OPERATION
         allowed = {"id", "path", "host", "category", "project", "purpose", "assessment", "reason", "effect",
                    "references", "comparison", "preconditions", "operation", "native", "observation",
-                   "assessment_basis", "specification_digest", "agent_assessment"}
+                   "assessment_basis", "specification_digest", "agent_assessment"} | ({"accepted_loss"} if plan["schema_version"] == 6 else set())
         for row in plan["candidates"]:
-            operations = {"directory-remove", "git-worktree-remove"} | (OPERATIONS if plan["schema_version"] in (3, 4, 5) else set()) | ({OPERATION} if plan["schema_version"] in (4, 5) else set()) | ({"file-remove"} if plan["schema_version"] == 5 else set())
+            operations = {"directory-remove", "git-worktree-remove"} | (OPERATIONS if plan["schema_version"] in (3, 4, 5, 6) else set()) | ({OPERATION} if plan["schema_version"] in (4, 5, 6) else set()) | ({"file-remove"} if plan["schema_version"] in (5, 6) else set())
             if set(row) - allowed or row.get("operation") not in operations:
                 raise ValueError("unknown frozen resource fields/operation")
+            generated = row.get("agent_assessment", {}).get("content_method") == "assessed-generated-output" or (row.get("comparison") or {}).get("method") == "assessed-generated-output"
+            if generated:
+                if (row.get("operation") not in {"file-remove", "directory-remove"} or row.get("category") != "output" or "native" in row
+                        or row.get("agent_assessment", {}).get("content_method") != "assessed-generated-output"
+                        or row.get("agent_assessment", {}).get("recovery_kind") != "accepted-loss"
+                        or row.get("comparison") is not None and (row["comparison"] != {"method":"assessed-generated-output", "independent_baseline":False, "provenance":"agent interpreted; not mechanically certified"}
+                            or row["comparison"].get("independent_baseline") is not False)):
+                    raise ValueError("inconsistent generated-output method/scope")
+                if plan["schema_version"] != 6:
+                    raise ValueError("generated-output row requires version 6")
+                if row["assessment"] == "Eligible":
+                    _validate_generated_output_row(row)
+                elif "accepted_loss" in row:
+                    loss = row["accepted_loss"]
+                    if (not isinstance(loss, dict) or set(loss) != {"binding_digest", "loss_summary"}
+                            or not isinstance(loss.get("loss_summary"), str) or not loss["loss_summary"].strip() or len(loss["loss_summary"]) > 1024
+                            or loss.get("binding_digest") != _generated_output_binding(row, loss.get("loss_summary"))):
+                        raise ValueError("invalid proposed accepted-loss binding")
+            elif "accepted_loss" in row:
+                raise ValueError("ordinary methods cannot carry accepted loss")
             if row["operation"] == "file-remove" and "native" in row:
                 raise ValueError("exact file cannot carry native identity")
             if row["operation"] == "directory-remove" and "native" in row:
@@ -839,22 +1057,22 @@ def validate_selection(plan, selected_ids, *, host=None):
             raise ValueError("unknown or ineligible selection")
         from .docker_cleanup import is_docker, EFFECTS
         from .npm_cache import is_npm_cache
-        if plan["schema_version"] in (4, 5) and is_npm_cache(row):
+        if plan["schema_version"] in (4, 5, 6) and is_npm_cache(row):
             selected.append(row)
             continue
-        if plan["schema_version"] in (3, 4, 5) and is_docker(row):
+        if plan["schema_version"] in (3, 4, 5, 6) and is_docker(row):
             if row["effect"] != EFFECTS[row["operation"]] or row["host"] != plan["host"]:
                 raise ValueError("unsupported Docker effect/host")
             selected.append(row)
             continue
-        file = plan["schema_version"] == 5 and row.get("operation") == "file-remove"
+        file = plan["schema_version"] in (5, 6) and row.get("operation") == "file-remove"
         if file:
             from .exact_file import validate_row
             validate_row(row)
             if any(_overlap(Path(row["path"]), Path(path)) for path in (*plan["policy"]["holds"], *plan["policy"]["exclusions"])):
                 raise ValueError("exact file is held/excluded")
-        native = plan["schema_version"] in (2, 3, 4, 5) and row.get("operation") == "git-worktree-remove"
-        if plan["schema_version"] in (2, 3, 4, 5) and row.get("operation") not in ({"directory-remove", "git-worktree-remove", "file-remove"} if plan["schema_version"] == 5 else {"directory-remove", "git-worktree-remove"}):
+        native = plan["schema_version"] in (2, 3, 4, 5, 6) and row.get("operation") == "git-worktree-remove"
+        if plan["schema_version"] in (2, 3, 4, 5, 6) and row.get("operation") not in ({"directory-remove", "git-worktree-remove", "file-remove"} if plan["schema_version"] in (5, 6) else {"directory-remove", "git-worktree-remove"}):
             raise ValueError("unknown typed operation")
         path = Path(row["path"])
         if (str(path) != os.path.abspath(path) or not any(_inside(path, Path(root)) for root in plan["scope_roots"])
@@ -868,8 +1086,8 @@ def validate_selection(plan, selected_ids, *, host=None):
             raise ValueError("unsupported effect/host")
         if any(not is_docker(other) and not is_npm_cache(other) and _overlap(path, Path(other["path"])) for other in selected):
             raise ValueError("overlapping selected targets")
-        if (_evidence_conflict(row, row, filesystem_targets_only=plan["schema_version"] == 5)
-                or any(_evidence_conflict(row, other, filesystem_targets_only=plan["schema_version"] == 5) for other in selected)):
+        if (_evidence_conflict(row, row, filesystem_targets_only=plan["schema_version"] in (5, 6))
+                or any(_evidence_conflict(row, other, filesystem_targets_only=plan["schema_version"] in (5, 6)) for other in selected)):
             raise ValueError("selected target contains another selection's evidence or rebuild inputs")
         selected.append(row)
     # Evidence/rebuild inputs for an earlier item must survive later selections.
@@ -878,7 +1096,7 @@ def validate_selection(plan, selected_ids, *, host=None):
         if any(_inside(Path(reference["path"]), Path(target["path"]))
                for reference in row.get("references", {}).values() for target in selected if not is_docker(target) and not is_npm_cache(target)):
             raise ValueError("selected batch contains required evidence/rebuild inputs")
-    if plan["schema_version"] in (2, 3, 4, 5):
+    if plan["schema_version"] in (2, 3, 4, 5, 6):
         context = plan["review_context"]
         if context["mode"] in {"task", "project"} and any(
                 _inside(Path(context["selected"]), Path(target["path"])) for target in selected if not is_docker(target) and not is_npm_cache(target)):
@@ -886,13 +1104,13 @@ def validate_selection(plan, selected_ids, *, host=None):
         for row in plan["candidates"]:
             if row.get("operation") == "git-worktree-remove" and "native" in row:
                 if any((_overlap(Path(row["native"][key]), Path(target["path"]))
-                        if plan["schema_version"] == 5 and target.get("operation") == "file-remove"
+                        if plan["schema_version"] in (5, 6) and target.get("operation") == "file-remove"
                         else _inside(Path(row["native"][key]), Path(target["path"])))
                        for key in ("repository", "common_directory", "administration") for target in selected if not is_docker(target) and not is_npm_cache(target)):
                     raise ValueError("selected batch contains required native repository/recovery state")
-    if plan["schema_version"] in (3, 4, 5):
+    if plan["schema_version"] in (3, 4, 5, 6):
         from .docker_cleanup import validate_batch
-        if plan["schema_version"] == 5:
+        if plan["schema_version"] in (5, 6):
             validate_batch(plan, [row for row in selected if not is_npm_cache(row)])
             # Native cache effects are real paths; their display labels are not.
             from .npm_cache import effect_paths
@@ -905,7 +1123,7 @@ def validate_selection(plan, selected_ids, *, host=None):
                         raise ValueError("selected cache effects overlap required provider state")
         else:
             validate_batch(plan, selected)
-    if plan["schema_version"] in (4, 5):
+    if plan["schema_version"] in (4, 5, 6):
         from .npm_cache import validate_batch
         validate_batch(plan, selected)
     return selected
@@ -931,7 +1149,7 @@ def write_plan(destination, plan):
     if plan.get("digest") != digest({key: value for key, value in plan.items() if key != "digest"}):
         raise ValueError("invalid plan digest")
     protected = [row["path"] for row in plan["candidates"]] + plan["scope_roots"]
-    if plan["schema_version"] == 5:
+    if plan["schema_version"] in (5, 6):
         from .docker_cleanup import is_docker
         from .npm_cache import is_npm_cache
         protected = list(plan["scope_roots"])

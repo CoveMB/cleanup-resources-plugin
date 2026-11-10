@@ -196,7 +196,10 @@ def render_text(report):
         if row.get("assessment_basis"):
             lines.append("Assessment basis: " + row["assessment_basis"])
         if row.get("comparison"):
-            lines.append("Content comparison: " + quote(row["comparison"]))
+            label = "Current inspection; no independent baseline: " if row["comparison"].get("method") == "assessed-generated-output" else "Content comparison: "
+            lines.append(label + quote(row["comparison"]))
+        if row.get("accepted_loss"):
+            lines.append("Attributed accepted loss (investigator interpretation): " + quote(row["accepted_loss"]))
         lines.append("Effect: " + row["effect"])
     for cache in report.get("npm_caches", []):
         lines.append("Npm cache coverage: " + quote(cache["cache"]) + " | " + cache["coverage"])

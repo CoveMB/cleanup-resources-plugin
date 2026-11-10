@@ -661,12 +661,16 @@ class AssessedPlans(unittest.TestCase):
         config = {"schema_version": 1, "roots": [str(self.project), str(fixture.project)]}
         from devspace import docker_cleanup, npm_cache
         import base64
-        for version in (1, 2, 3, 4, 5):
+        from test_generated_output import GeneratedOutputFixture
+        generated=GeneratedOutputFixture();generated.setUp();self.addCleanup(generated.doCleanups)
+        for version in (1, 2, 3, 4, 5, 6):
             assessment = copy.deepcopy(self.assessment)
             assessment["schema_version"] = version
             for row in assessment["candidates"]:
                 row["path"] = str(self.project / row["path"])
                 if version >= 2: row["operation"] = "directory-remove"
+            if version == 6:
+                assessment=generated.decided();config['roots'].append(str(generated.project))
             if version >= 3:
                 assessment["candidates"].append({"operation": "docker-container-remove",
                     "docker": {"endpoint": "unix://"+str(self.base / "fixture.sock"), "id": "a"*64}})
@@ -744,20 +748,25 @@ class AssessedPlans(unittest.TestCase):
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         linked, request, record = fixture.lineage_fixture(linked_name="linked")
-        config = {"schema_version": 1, "roots": [str(fixture.project), str(self.project)]}
-        assessment = copy.deepcopy(self.assessment)
-        for row in assessment["candidates"]: row["path"] = str(self.project / row["path"])
-        before = (test_git_inventory.lineage_snapshot(fixture.fixture), test_git_inventory.lineage_snapshot(self.base))
-        control = self.owner().review_scope(config, mode="global", assessment=assessment)
-        self.assertTrue(any(row["assessment"] == "Eligible" for row in control["candidates"]))
-        for failure in (inventory.InspectionUnavailable("time limit"), inventory.InspectionCancelled("cancelled"), KeyboardInterrupt()):
-            with patch("devspace.git_inventory.observe_lineage", side_effect=failure):
-                report = self.owner().review_scope(config, mode="global", assessment=assessment, git_lineage=request)
-            self.assertEqual(report["cancelled"], isinstance(failure, (inventory.InspectionCancelled, KeyboardInterrupt)))
-            self.assertFalse(report["coverage"]["complete"])
-            for key in ("candidates", "scope_roots", "plan", "size"):
-                self.assertEqual(report[key], control[key], key)
-        self.assertEqual((test_git_inventory.lineage_snapshot(fixture.fixture), test_git_inventory.lineage_snapshot(self.base)), before)
+        from test_generated_output import GeneratedOutputFixture
+        generated=GeneratedOutputFixture();generated.setUp();self.addCleanup(generated.doCleanups)
+        for version in (1,6):
+            config = {"schema_version": 1, "roots": [str(fixture.project), str(self.project)]}
+            assessment = generated.decided() if version==6 else copy.deepcopy(self.assessment)
+            if version==6:config['roots'].append(str(generated.project))
+            else:
+                for row in assessment['candidates']:row['path']=str(self.project/row['path'])
+            before = (test_git_inventory.lineage_snapshot(fixture.fixture), test_git_inventory.lineage_snapshot(self.base))
+            control = self.owner().review_scope(config, mode="global", assessment=assessment)
+            self.assertTrue(any(row["assessment"] == "Eligible" for row in control["candidates"]))
+            for failure in (inventory.InspectionUnavailable("time limit"), inventory.InspectionCancelled("cancelled"), KeyboardInterrupt()):
+                with patch("devspace.git_inventory.observe_lineage", side_effect=failure):
+                    report = self.owner().review_scope(config, mode="global", assessment=assessment, git_lineage=request)
+                self.assertEqual(report["cancelled"], isinstance(failure, (inventory.InspectionCancelled, KeyboardInterrupt)))
+                self.assertFalse(report["coverage"]["complete"])
+                for key in ("candidates", "scope_roots", "plan", "size"):
+                    self.assertEqual(report[key], control[key], key)
+            self.assertEqual((test_git_inventory.lineage_snapshot(fixture.fixture), test_git_inventory.lineage_snapshot(self.base)), before)
 
 
     def test_git_lineage_requested_claim_failure_paths(self):
@@ -773,7 +782,9 @@ class AssessedPlans(unittest.TestCase):
         # both contracts. The v5 arm has a real independent exact-file candidate.
         from test_exact_file import ExactFileFixture
         file_fixture = ExactFileFixture(); file_fixture.setUp(); self.addCleanup(file_fixture.doCleanups)
-        for version in (1, 5):
+        from test_generated_output import GeneratedOutputFixture
+        generated = GeneratedOutputFixture(); generated.setUp(); self.addCleanup(generated.doCleanups)
+        for version in (1, 5, 6):
             config = {"schema_version": 1, "roots": [str(self.project), str(fixture.project)]}
             assessment = copy.deepcopy(self.assessment)
             for row in assessment["candidates"]: row["path"] = str(self.project / row["path"])
@@ -781,6 +792,9 @@ class AssessedPlans(unittest.TestCase):
                 assessment = copy.deepcopy(file_fixture.assessment)
                 assessment["candidates"][0]["path"] = str(file_fixture.target)
                 config["roots"].append(str(file_fixture.project))
+            if version == 6:
+                assessment = generated.decided()
+                config["roots"].append(str(generated.project))
             control = self.owner().review_scope(config, mode="global", assessment=assessment)
             self.assertTrue(any(row["assessment"] == "Eligible" for row in control["candidates"]))
             if version == 5:

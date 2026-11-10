@@ -14,6 +14,66 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PackageInvocation(unittest.TestCase):
+    def test_generated_v6_extracted_review_selection_and_cancel(self):
+        import copy
+        from test_generated_output import GeneratedOutputFixture
+        fixture = GeneratedOutputFixture(); fixture.setUp(); self.addCleanup(fixture.doCleanups)
+        archive = fixture.base / "file-plugin.zip"
+        built = subprocess.run([sys.executable, "-B", str(ROOT / "scripts/build_package.py"), str(archive)], capture_output=True, text=True, timeout=15)
+        self.assertEqual(built.returncode, 0, built.stderr)
+        extracted = fixture.base / "extracted"
+        with zipfile.ZipFile(archive) as package:
+            self.assertEqual(len(package.namelist()), 16)
+            self.assertIn("skills/task-disk-review/scripts/devspace/exact_file.py", package.namelist())
+            self.assertFalse(any(".superpowers" in name or ".git" in name or name.startswith("tests/") for name in package.namelist()))
+            package.extractall(extracted)
+        scripts = extracted / "skills/task-disk-review/scripts"; cli = scripts / "devspace.py"
+        before = fixture.survivors()
+        config = fixture.base / "config.json"; config.write_text(json.dumps({"schema_version": 1, "roots": [str(fixture.project)]}))
+        manifest = fixture.base / "manifest.json"; manifest.write_text(json.dumps({"schema_version": 1, "resources": []}))
+        for mode in ("task", "project", "global"):
+            document = copy.deepcopy(fixture.decided())
+            if mode == "global": document["candidates"][0]["path"] = str(fixture.file)
+            ap = fixture.base / (mode + "-assessment.json"); ap.write_text(json.dumps(document))
+            args = ["review", "--global", "--config", str(config)] if mode == "global" else ["review", "--" + mode, str(fixture.project)]
+            pp = fixture.base / (mode + "-plan.json"); mp = fixture.base / (mode + "-manifest.json")
+            def invoke(*extra, arguments=args):
+                return subprocess.run([sys.executable, "-B", str(cli), *arguments, "--assessment", str(ap), *extra], cwd=fixture.base, capture_output=True, text=True, timeout=20)
+            observed = invoke("--json", "--plan-output", str(pp), "--manifest", str(manifest), "--manifest-output", str(mp))
+            self.assertIn(observed.returncode, (0, 2), observed.stderr)
+            report = json.loads(observed.stdout); self.assertEqual(json.loads(pp.read_text()), report["plan"])
+            self.assertEqual(json.loads(mp.read_text()), {"schema_version": 1, "resources": []})
+            row = next(r for r in report["candidates"] if r.get("operation") == "file-remove")
+            self.assertEqual(row["assessment"], "Eligible"); self.assertIn("parent and siblings preserved", row["effect"])
+            selected_rows = [r for r in report["candidates"] if r.get("category") == "output"]
+            self.assertEqual(len(selected_rows), 2)
+            self.assertTrue(all(r["assessment"] == "Eligible" for r in selected_rows))
+            self.assertTrue(all(r["comparison"]["independent_baseline"] is False for r in selected_rows))
+            text = invoke(); self.assertIn(text.returncode, (0, 2), text.stderr); self.assertIn("parent and siblings preserved", text.stdout)
+            code = ("import json,sys; sys.path.insert(0,sys.argv[1]); from devspace import plans,exact_file; "
+                    "assert exact_file.__file__.startswith(sys.argv[1]); plans.validate_selection(json.load(open(sys.argv[2])),sys.argv[3].split(','))")
+            selection = subprocess.run([sys.executable, "-B", "-c", code, str(scripts), str(pp), ",".join(r["id"] for r in selected_rows)], cwd=fixture.base, capture_output=True, text=True, timeout=15)
+            self.assertEqual(selection.returncode, 0, selection.stderr)
+            cancelled = subprocess.run([sys.executable, "-B", str(cli), "apply", "--plan", str(pp), "--cancel"], cwd=fixture.base, capture_output=True, text=True, timeout=15)
+            self.assertEqual(cancelled.returncode, 0, cancelled.stderr); self.assertEqual(json.loads(cancelled.stdout)["outcome"], "cancelled")
+            # On supported hosts the real CLI can acquire state before refusing stdin.
+            # Bind that state to this owned fixture, never the runner account's home.
+            wrapper = ("import sys,runpy; from pathlib import Path; sys.path.insert(0,sys.argv[1]); "
+                       "from devspace import cleanup; cleanup._state_path=lambda:Path(sys.argv[2]); "
+                       "sys.argv=[sys.argv[3],*sys.argv[4:]]; runpy.run_path(sys.argv[0],run_name='__main__')")
+            piped = subprocess.run([sys.executable, "-B", "-c", wrapper, str(scripts), str(fixture.base / "private-state"), str(cli), "apply", "--plan", str(pp), "--assessment", str(ap), "--manifest", str(manifest), *(["--config", str(config)] if mode == "global" else []), "--select" , ",".join(r["id"] for r in selected_rows)], input="REMOVE wrong\n", cwd=fixture.base, capture_output=True, text=True, timeout=15)
+            self.assertEqual(piped.returncode, 1); self.assertTrue(fixture.file.exists())
+            alias=fixture.base/(mode+"-decision-alias");os.link(fixture.records/"human.txt",alias)
+            before=fixture.survivors()  # alias creation changes reference ctime
+            for flag in ("--plan-output","--manifest-output"):
+                for destination in (fixture.file,fixture.directory,ap,pp,config,manifest,alias,*[Path(r["path"]) for r in fixture.references.values()]):
+                    invalid=invoke("--manifest",str(manifest),flag,str(destination))
+                    self.assertEqual(invalid.returncode,1,(flag,str(destination),invalid.stderr))
+                    self.assertEqual(before,fixture.survivors())
+            alias.unlink()
+            before=fixture.survivors()
+            self.assertEqual(before, fixture.survivors())
+
     def test_file_v5_extracted_review_and_cancel(self):
         import copy
         from test_exact_file import ExactFileFixture
