@@ -78,6 +78,7 @@ def inventory_docker(endpoint, *, timeout, cancelled=None):
 def review_global(config, *, assessment=None, manifest=None, holds=(), exclusions=(), max_entries=2000,
                   max_depth=12, timeout=10.0, max_content_bytes=256 * 1024 * 1024, cancelled=None,
                   evidence_warn_bytes=plans.EVIDENCE_WARN_BYTES, evidence_explain_bytes=plans.EVIDENCE_EXPLAIN_BYTES):
+    """Inventory configured development roots and providers without conflating their coverage."""
     plans.validate_evidence_thresholds(evidence_warn_bytes, evidence_explain_bytes)
     validate_config(config)
     assessment = assessment or EMPTY_ASSESSMENT

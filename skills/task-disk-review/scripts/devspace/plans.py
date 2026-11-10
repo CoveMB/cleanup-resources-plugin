@@ -112,6 +112,7 @@ def _evidence_conflict(first, second):
 
 
 def _reference(identifier, references, target, observed, deadline):
+    """Read independently recorded evidence while rejecting self-reference and drift."""
     reference = references[identifier]
     if set(reference) != {"path", "sha256"}:
         raise ValueError("reference requires exact path and sha256")
@@ -285,6 +286,7 @@ def _assess(row, specification, references, snapshot, historical, deadline):
     payloads = {}
 
     def reference(identifier):
+        """Resolve evidence once per candidate and replace private read errors with diagnostics."""
         try:
             if identifier not in checked:
                 payloads[identifier], checked[identifier] = _reference(identifier, references, Path(row["path"]), observed, deadline)
@@ -295,6 +297,7 @@ def _assess(row, specification, references, snapshot, historical, deadline):
             raise _AssessmentUnresolved("referenced evidence unavailable or unsafe") from None
 
     def basis(claim, missing_reason):
+        """Require the stated evidence identifiers for a cleanup eligibility claim."""
         identifiers = claim.get("basis", [])
         if not identifiers:
             raise _AssessmentUnresolved(missing_reason)
@@ -525,6 +528,7 @@ def _review_docker_scope(selected, **options):
 def _review_scope(selected, *, mode="task", assessment=None, manifest=None, holds=(), exclusions=(),
                  max_entries=2000, max_depth=12, timeout=10.0, max_content_bytes=256 * 1024 * 1024, cancelled=None,
                  evidence_warn_bytes=EVIDENCE_WARN_BYTES, evidence_explain_bytes=EVIDENCE_EXPLAIN_BYTES):
+    """Dispatch a bounded review while preserving incomplete Git and filesystem coverage."""
     validate_evidence_thresholds(evidence_warn_bytes, evidence_explain_bytes)
     if mode == "global":
         from .global_inventory import review_global

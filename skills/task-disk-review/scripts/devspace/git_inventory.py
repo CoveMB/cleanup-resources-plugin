@@ -166,6 +166,7 @@ def inventory_git(selected, *, exclusions=(), max_worktrees=32, timeout=10.0, ca
     excluded_paths = [Path(os.path.abspath(value)) for value in exclusions]
 
     def check_exclusions(directory):
+        """Refuse Git inspection for scopes overlapping excluded paths or their aliases."""
         # Broad Git commands can enumerate descendants or read repository metadata.
         # Refuse the entire affected checkout before any native probe.
         if any(path_inside(directory, excluded) or path_inside(excluded, directory)
@@ -174,6 +175,7 @@ def inventory_git(selected, *, exclusions=(), max_worktrees=32, timeout=10.0, ca
 
 
     def metadata_target(path, prefix=b""):
+        """Read a bounded metadata link and reject unsafe or ambiguous destinations."""
         # Reuse bounded, descriptor-based Git metadata reads after module loading.
         from .git_worktree import _metadata_file
         check_exclusions(path)
@@ -198,6 +200,7 @@ def inventory_git(selected, *, exclusions=(), max_worktrees=32, timeout=10.0, ca
         return resolved
 
     def check_metadata(directory):
+        """Validate the selected worktree's Git metadata before native Git inspection."""
         if not excluded_paths:
             return
         metadata = directory / ".git"

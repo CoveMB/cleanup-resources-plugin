@@ -188,6 +188,7 @@ class GitInventory(unittest.TestCase):
             self.assertTrue(result["limitations"])
 
     def test_project_review_includes_linked_contents_without_mutating_git_state(self):
+        """Project review observes linked checkout content without changing Git state."""
         from devspace.plans import review_scope
         linked = self.fixture / "linked"
         self.git("worktree", "add", "--detach", str(linked), "HEAD")
@@ -215,6 +216,7 @@ class GitInventory(unittest.TestCase):
 
 
     def test_project_exclusions_block_the_first_native_git_command(self):
+        """Excluding selected content or metadata prevents all native Git probes."""
         from devspace.git_inventory import _git
         from devspace.plans import review_scope
         excluded = self.project / "private"
@@ -237,6 +239,7 @@ class GitInventory(unittest.TestCase):
                 self.assertEqual(snapshot(self.fixture), before)
 
     def test_linked_exclusions_prevent_probes_and_preserve_unaffected_status(self):
+        """An excluded linked checkout remains unknown while the selected checkout is observed."""
         from devspace.git_inventory import _git
         from devspace.plans import review_scope
         linked = self.fixture / "linked"
@@ -264,6 +267,7 @@ class GitInventory(unittest.TestCase):
                 self.assertEqual(snapshot(self.fixture), before)
 
     def test_exclusion_case_aliases_block_selected_and_linked_probes(self):
+        """Case-insensitive aliases cannot bypass selected or linked exclusions."""
         from devspace.git_inventory import _git
         from devspace.plans import review_scope
         selected_alias = self.project.with_name("PROJECT")
@@ -288,6 +292,7 @@ class GitInventory(unittest.TestCase):
 
 
     def test_linked_selection_excludes_external_git_metadata_before_native_calls(self):
+        """Linked selections refuse excluded common metadata before running Git."""
         from devspace.git_inventory import _git
         from devspace.plans import review_scope
         linked = self.fixture / "linked"
@@ -313,6 +318,7 @@ class GitInventory(unittest.TestCase):
 
 
     def test_metadata_symlink_parent_resolution_matches_native_git_before_exclusion(self):
+        """Ambiguous metadata links never bypass exclusions through symlink-parent traversal."""
         from devspace.git_inventory import _git
         from devspace.plans import review_scope
         linked = self.fixture / "linked"

@@ -138,6 +138,7 @@ class AssessedPlans(unittest.TestCase):
         self.assertEqual(before, self.bytes())
 
     def test_unresolved_obligations_report_distinct_reasons(self):
+        """Unmet obligations give specific private-safe review diagnostics."""
         from devspace.report import render_text
         cases = (
             ("missing-inventory", "independent content baseline missing or unsupported"),
@@ -183,6 +184,7 @@ class AssessedPlans(unittest.TestCase):
                                  b"synthetic original install failure\n")
 
     def test_contextual_obligations_identify_the_missing_basis(self):
+        """Missing evidence for each contextual obligation remains explicitly unresolved."""
         cases = (
             ("content", "content provenance evidence missing"),
             ("recovery", "recovery evidence missing"),
@@ -200,6 +202,7 @@ class AssessedPlans(unittest.TestCase):
         self.assertEqual(self.bytes(), before)
 
     def test_unexpected_reference_errors_do_not_leak(self):
+        """Evidence-read failures never expose private exception payloads in reports."""
         from devspace.report import render_text
         before = self.bytes()
         for error_type in (OSError, ValueError, KeyError, TypeError, UnicodeError, RecursionError):
@@ -214,6 +217,7 @@ class AssessedPlans(unittest.TestCase):
         self.assertEqual(self.bytes(), before)
 
     def test_protection_precedes_unresolved_diagnostics(self):
+        """Protected content and active consumers override less restrictive diagnostics."""
         (self.project / "A/.env").write_bytes(b"SYNTHETIC_PROTECTED_SECRET")
         self.specifications[0]["content"] = {}
         self.specifications[1]["consumers"][0]["state"] = "active"
@@ -230,6 +234,7 @@ class AssessedPlans(unittest.TestCase):
         self.assertEqual(self.bytes(), before)
 
     def test_diagnostic_changes_preserve_versioned_selection(self):
+        """Diagnostic refinements preserve versioned plan selection and eligibility."""
         before = self.bytes()
         owner = self.owner()
         for version in (1, 2, 3, 4):

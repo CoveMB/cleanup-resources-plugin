@@ -248,6 +248,7 @@ class GlobalCoverage(unittest.TestCase):
 
 
     def test_git_exclusions_block_configured_and_cli_scope_before_native_commands(self):
+        """Configured and CLI exclusions prevent Git probes while retaining other findings."""
         from devspace.git_inventory import _git
         fixture = test_git_inventory.GitInventory()
         fixture.setUp()
@@ -277,6 +278,7 @@ class GlobalCoverage(unittest.TestCase):
                     self.assertEqual(test_git_inventory.snapshot(fixture.fixture), before)
 
     def test_git_exclusions_block_linked_checkout_probes_in_global_scope(self):
+        """Global Git inventory leaves excluded linked checkout status unknown."""
         from devspace.git_inventory import _git
         fixture = test_git_inventory.GitInventory()
         fixture.setUp()
@@ -307,6 +309,7 @@ class GlobalCoverage(unittest.TestCase):
                 self.assertEqual(test_git_inventory.snapshot(fixture.fixture), before)
 
     def test_git_exclusions_preserve_provider_scope_distinction(self):
+        """Provider storage remains separate from Git roots and their exclusions."""
         from devspace.git_inventory import _git
         fixture = test_git_inventory.GitInventory()
         fixture.setUp()
@@ -335,6 +338,7 @@ class GlobalCoverage(unittest.TestCase):
 
 
     def test_linked_selection_global_excludes_external_git_metadata_before_native_calls(self):
+        """Global linked-checkout inspections honor exclusions on external Git metadata."""
         from devspace.git_inventory import _git
         fixture = test_git_inventory.GitInventory()
         fixture.setUp()
