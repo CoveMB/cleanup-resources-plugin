@@ -446,6 +446,33 @@ class GlobalCoverage(unittest.TestCase):
         self.assertEqual(self.locations(self.review(), "development")[0]["status"], "unconfigured")
 
 
+
+    def test_git_lineage_global_scope_and_text(self):
+        from devspace.report import render_text
+        fixture = test_git_inventory.GitInventory()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        linked, request, record = fixture.lineage_fixture(linked_name="linked")
+        config = {"schema_version": 1, "roots": [str(self.root), str(fixture.project)]}
+        before = test_git_inventory.lineage_snapshot(fixture.fixture)
+        control = plans.review_scope(config, mode="global")
+        report = plans.review_scope(config, mode="global", git_lineage=request)
+        self.assertEqual(report["git_lineage"]["status"], "observed", report["git_lineage"])
+        self.assertIs(report["git_lineage"]["retention"]["head_in_ref"], True)
+        self.assertIs(report["git_lineage"]["ancestry"]["head_in_destination"], False)
+        text = render_text(report)
+        self.assertIn("Git lineage", text)
+        self.assertIn("not_established", text)
+        self.assertIn(request["expected_head"], text)
+        for key in ("candidates", "scope_roots", "plan", "size"):
+            self.assertEqual(report[key], control[key], key)
+        config["host_identity"] = "different-host"
+        with patch("devspace.git_inventory.observe_lineage", side_effect=AssertionError("host acquisition")):
+            result = plans.review_scope(config, mode="global", git_lineage=request)
+        self.assertEqual(result["git_lineage"]["status"], "not_examined")
+        self.assertEqual(test_git_inventory.lineage_snapshot(fixture.fixture), before)
+
+
 class GlobalAssessment(unittest.TestCase):
     def test_shared_eligible_hold_and_frozen_selection_contract(self):
         fixture = test_plans.AssessedPlans(methodName="test_source_journey_and_equivalent_unregistered_assessment_preserve_bytes")

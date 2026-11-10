@@ -650,5 +650,274 @@ class AssessedPlans(unittest.TestCase):
             self.owner().read_document(duplicate)
 
 
+
+    def test_git_lineage_final_phase_preserves_review(self):
+        import test_git_inventory
+        import devspace.git_inventory as inventory
+        fixture = test_git_inventory.GitInventory()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        linked, request, record = fixture.lineage_fixture(linked_name="linked")
+        config = {"schema_version": 1, "roots": [str(self.project), str(fixture.project)]}
+        from devspace import docker_cleanup, npm_cache
+        import base64
+        for version in (1, 2, 3, 4):
+            assessment = copy.deepcopy(self.assessment)
+            assessment["schema_version"] = version
+            for row in assessment["candidates"]:
+                row["path"] = str(self.project / row["path"])
+                if version >= 2: row["operation"] = "directory-remove"
+            if version >= 3:
+                assessment["candidates"].append({"operation": "docker-container-remove",
+                    "docker": {"endpoint": "unix://"+str(self.base / "fixture.sock"), "id": "a"*64}})
+            if version >= 4:
+                (self.base / "selected-cache").mkdir(exist_ok=True)
+                assessment["candidates"].append({"operation": "npm-cache-remove", "npm": {
+                    "cache": str(self.base / "selected-cache"), "key": "selected",
+                    "integrity": "sha512-"+base64.b64encode(bytes(64)).decode()}})
+            cache = str(self.base / "optional-cache")
+            before = (test_git_inventory.lineage_snapshot(fixture.fixture), test_git_inventory.lineage_snapshot(self.base))
+            events = []
+            clock = [100.0]
+            advancing_clock = [False]
+            original_docker, original_npm = docker_cleanup.review, npm_cache.review
+            def docker(*args, **kwargs):
+                events.append("docker")
+                with patch("devspace.docker_cleanup.inspect", side_effect=inventory.InspectionUnavailable("fixture provider unavailable")):
+                    return original_docker(*args, **kwargs)
+            def npm(*args, **kwargs):
+                events.append("npm")
+                with patch("devspace.npm_cache.inspect", side_effect=inventory.InspectionUnavailable("fixture provider unavailable")):
+                    return original_npm(*args, **kwargs)
+            def discover(*args, **kwargs):
+                events.append("cache")
+                if advancing_clock[0]: clock[0] = 108.0
+                return {"cache": cache, "coverage": "examined", "entries": []}
+            with patch("devspace.npm_cache.inventory", side_effect=discover), \
+                    patch("devspace.docker_cleanup.review", side_effect=docker), \
+                    patch("devspace.npm_cache.review", side_effect=npm):
+                control = self.owner().review_scope(config, mode="global", assessment=assessment, npm_caches=[cache])
+            self.assertTrue(any(row["assessment"] == "Eligible" for row in control["candidates"]))
+            def exhausted(*args, **kwargs):
+                expected = (["docker"] if version >= 3 else []) + (["npm"] if version >= 4 else []) + ["cache"]
+                self.assertEqual(events[-len(expected):], expected)
+                self.assertEqual(kwargs["deadline"], 110.0, "lineage receives the original outer deadline")
+                self.assertEqual(freeze.call_args.args[0]["plan"], control["plan"], "final frozen plan exists before lineage")
+                freezes_at_lineage.append(freeze.call_count)
+                raise inventory.InspectionUnavailable("Git inspection time limit; remaining state unknown")
+            with patch("devspace.npm_cache.inventory", side_effect=discover), \
+                    patch("devspace.docker_cleanup.review", side_effect=docker), \
+                    patch("devspace.npm_cache.review", side_effect=npm):
+                observed = self.owner().review_scope(config, mode="global", assessment=assessment,
+                                                    npm_caches=[cache], git_lineage=request)
+            self.assertEqual(observed["git_lineage"]["status"], "observed")
+            for key in ("candidates", "scope_roots", "plan", "size"):
+                self.assertEqual(observed[key], control[key], key)
+            advancing_clock[0] = True
+            freezes_at_lineage = []
+            with self.subTest(version=version), patch("devspace.plans.time.monotonic", side_effect=lambda: clock[0]), \
+                    patch("devspace.npm_cache.inventory", side_effect=discover), \
+                    patch("devspace.docker_cleanup.review", side_effect=docker), \
+                    patch("devspace.npm_cache.review", side_effect=npm), \
+                    patch("devspace.plans.freeze_review", wraps=self.owner().freeze_review) as freeze, \
+                    patch("devspace.git_inventory.observe_lineage", side_effect=exhausted) as observe:
+                report = self.owner().review_scope(config, mode="global", assessment=assessment,
+                                                  npm_caches=[cache], git_lineage=request)
+            observe.assert_called_once()
+            self.assertEqual(freezes_at_lineage, [freeze.call_count], "no freeze occurs after lineage")
+            for key in ("candidates", "scope_roots", "plan", "size"):
+                self.assertEqual(report[key], control[key], key)
+            self.assertFalse(report["coverage"]["complete"])
+            self.assertNotEqual(report["git_lineage"]["status"], "observed")
+            self.assertEqual((test_git_inventory.lineage_snapshot(fixture.fixture), test_git_inventory.lineage_snapshot(self.base)), before)
+        # Time consumed by ordinary work cannot create a fresh advisory budget.
+        with patch("devspace.plans._review_docker_scope", return_value=copy.deepcopy(control)), \
+                patch("devspace.plans.time.monotonic", side_effect=[10, 30]), \
+                patch("devspace.git_inventory.observe_lineage", side_effect=AssertionError("expired acquisition")):
+            report = self.owner().review_scope(config, mode="global", timeout=1, git_lineage=request)
+        self.assertEqual(report["git_lineage"]["status"], "not_examined")
+
+    def test_git_lineage_global_later_root_survives_exhaustion(self):
+        import test_git_inventory
+        import devspace.git_inventory as inventory
+        fixture = test_git_inventory.GitInventory()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        linked, request, record = fixture.lineage_fixture(linked_name="linked")
+        config = {"schema_version": 1, "roots": [str(fixture.project), str(self.project)]}
+        assessment = copy.deepcopy(self.assessment)
+        for row in assessment["candidates"]: row["path"] = str(self.project / row["path"])
+        before = (test_git_inventory.lineage_snapshot(fixture.fixture), test_git_inventory.lineage_snapshot(self.base))
+        control = self.owner().review_scope(config, mode="global", assessment=assessment)
+        self.assertTrue(any(row["assessment"] == "Eligible" for row in control["candidates"]))
+        for failure in (inventory.InspectionUnavailable("time limit"), inventory.InspectionCancelled("cancelled"), KeyboardInterrupt()):
+            with patch("devspace.git_inventory.observe_lineage", side_effect=failure):
+                report = self.owner().review_scope(config, mode="global", assessment=assessment, git_lineage=request)
+            self.assertEqual(report["cancelled"], isinstance(failure, (inventory.InspectionCancelled, KeyboardInterrupt)))
+            self.assertFalse(report["coverage"]["complete"])
+            for key in ("candidates", "scope_roots", "plan", "size"):
+                self.assertEqual(report[key], control[key], key)
+        self.assertEqual((test_git_inventory.lineage_snapshot(fixture.fixture), test_git_inventory.lineage_snapshot(self.base)), before)
+
+
+    def test_git_lineage_requested_claim_failure_paths(self):
+        # Catches loss/mislabeling of requested claims on every outer skip/exception route.
+        import test_git_inventory
+        from devspace import git_inventory as inventory
+        from devspace.report import render_text
+        fixture = test_git_inventory.GitInventory()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        linked, request, record = fixture.integration_fixture("squash")
+        config = {"schema_version": 1, "roots": [str(self.project), str(fixture.project)]}
+        assessment = copy.deepcopy(self.assessment)
+        for row in assessment["candidates"]: row["path"] = str(self.project / row["path"])
+        control = self.owner().review_scope(config, mode="global", assessment=assessment)
+        self.assertTrue(any(row["assessment"] == "Eligible" for row in control["candidates"]))
+        before = (test_git_inventory.lineage_snapshot(fixture.fixture), test_git_inventory.lineage_snapshot(self.base))
+        failures = ("unmatched", "budget", "scope", "host", "already-cancelled", "cancelled", "interrupt", "unavailable")
+        for kind in ("squash", "merge", "absent"):
+            trial = copy.deepcopy(request)
+            if kind == "merge":
+                trial["integration"]["kind"] = "merge"
+                trial["integration"].pop("source_base_commit")
+            elif kind == "absent": trial.pop("integration")
+            for failure in failures:
+                ordinary = copy.deepcopy(control)
+                selected = copy.deepcopy(config)
+                supplied = copy.deepcopy(trial)
+                if failure == "unmatched": supplied["path"] = str(fixture.fixture / "unmatched")
+                if failure == "scope": ordinary["invalid_scope"] = True
+                if failure == "host": selected["host_identity"] = "different-host"
+                if failure == "already-cancelled": ordinary["cancelled"] = True
+                error = {"cancelled": inventory.InspectionCancelled("cancelled"), "interrupt": KeyboardInterrupt(),
+                         "unavailable": inventory.InspectionUnavailable("unavailable")}.get(failure)
+                skipped = error is None
+                with self.subTest(kind=kind, failure=failure), \
+                        patch("devspace.plans._review_docker_scope", return_value=ordinary), \
+                        patch("devspace.plans.time.monotonic", side_effect=[100, 120] if failure == "budget" else lambda: 100), \
+                        patch("devspace.git_inventory.observe_lineage", side_effect=error or AssertionError("skipped observer acquired")) as observer, \
+                        patch("devspace.git_inventory._git", side_effect=AssertionError("unexpected native acquisition")), \
+                        patch("devspace.git_worktree._metadata_file", side_effect=AssertionError("unexpected metadata acquisition")), \
+                        patch("devspace.git_worktree._administration_state", side_effect=AssertionError("unexpected admin acquisition")), \
+                        patch("devspace.plans._open_parent", side_effect=AssertionError("unexpected descriptor acquisition")):
+                    report = self.owner().review_scope(selected, mode="global", assessment=assessment, git_lineage=supplied)
+                self.assertEqual(observer.call_count, 0 if skipped else 1)
+                self.assertEqual(report["cancelled"], failure in ("already-cancelled", "cancelled", "interrupt"))
+                lineage = report["git_lineage"]
+                self.assertEqual(lineage["status"], "unavailable" if failure == "unavailable" else "not_examined")
+                if kind == "absent":
+                    self.assertEqual(lineage["integration"], {"status": "not_requested"})
+                    self.assertEqual(lineage["patch_equivalence"], {"status": "not_requested"})
+                else:
+                    evidence = lineage["integration"]
+                    self.assertEqual(evidence["status"], "unavailable")
+                    for field, value in trial["integration"].items(): self.assertEqual(evidence[field], value)
+                    self.assertEqual(evidence["claim_authenticity"], "unverified")
+                    self.assertEqual(evidence["current_content_preservation"], "unestablished")
+                    for field in ("source_matches_head", "source_in_head", "source_in_parents", "destination_parent_count",
+                                  "destination_in_current_destination", "current_destination_matches_claim",
+                                  "current_destination_tree_matches_claim", "current_destination_commit"):
+                        self.assertIsNone(evidence[field], field)
+                    if kind == "squash":
+                        self.assertEqual(evidence["squash_provenance"], "unverified")
+                        self.assertEqual(lineage["patch_equivalence"]["status"], "unavailable")
+                        for field in ("equal", "source_path_count", "destination_path_count", "destination_base_commit"):
+                            self.assertIsNone(lineage["patch_equivalence"][field], field)
+                        self.assertIn('"squash_provenance": "unverified"', render_text(report))
+                    else: self.assertEqual(lineage["patch_equivalence"], {"status": "not_requested"})
+                    self.assertTrue(any("authenticate" in limitation for limitation in lineage["limitations"]))
+                self.assertEqual(lineage["binding"], {})
+                self.assertFalse(report["coverage"]["complete"])
+                for key in ("candidates", "scope_roots", "plan", "size"):
+                    self.assertEqual(report[key], control[key], key)
+        self.assertEqual((test_git_inventory.lineage_snapshot(fixture.fixture), test_git_inventory.lineage_snapshot(self.base)), before)
+
+    def test_git_lineage_last_administration_read_preserves_cancellation(self):
+        # Catches final drift/read-failure returning incomplete instead of cancelled.
+        import time
+        import test_git_inventory
+        from devspace import git_inventory as inventory, git_worktree as adapter
+        fixture = test_git_inventory.GitInventory()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        linked, request, record = fixture.integration_fixture("squash")
+        config = {"schema_version": 1, "roots": [str(self.project), str(fixture.project)]}
+        assessment = copy.deepcopy(self.assessment)
+        for row in assessment["candidates"]: row["path"] = str(self.project / row["path"])
+        control = self.owner().review_scope(config, mode="global", assessment=assessment)
+        self.assertTrue(any(row["assessment"] == "Eligible" for row in control["candidates"]))
+        original = adapter._administration_state
+        native = inventory._git
+        exclusions = inventory._check_exclusions
+        for outcome, cancel_after in (("unchanged", False), ("unchanged", True), ("drift", False),
+                                      ("drift", True), ("ValueError", False), ("ValueError", True),
+                                      ("OSError", False), ("OSError", True), ("deadline", False)):
+            reads, deltas = 0, 0
+            clock = [time.monotonic()]
+            completed = False
+            drift_path = None
+            drift_original = None
+            expected_git = test_git_inventory.lineage_snapshot(fixture.fixture)
+            before_ordinary = test_git_inventory.lineage_snapshot(self.base)
+            def final_read(path):
+                nonlocal reads, completed, drift_path, drift_original, expected_git
+                reads += 1
+                if reads == 2 and outcome == "drift":
+                    drift_path = path / "ORIG_HEAD"
+                    drift_original = drift_path.read_bytes() if drift_path.exists() else None
+                    changed_root = request["integration"]["destination_commit"]
+                    if drift_original == (changed_root+"\n").encode(): changed_root = request["expected_head"]
+                    drift_path.write_text(changed_root+"\n")
+                value = original(path)
+                if reads == 2:
+                    completed = True
+                    expected_git = test_git_inventory.lineage_snapshot(fixture.fixture)
+                    if outcome == "deadline": clock[0] += 11
+                    if outcome == "ValueError": raise ValueError("controlled final read failure")
+                    if outcome == "OSError": raise OSError("controlled final read failure")
+                return value
+            def actual_native(*args):
+                nonlocal deltas
+                self.assertFalse(completed, "no native acquisition after final read")
+                result = native(*args)
+                if "diff-tree" in args[2]: deltas += 1
+                return result
+            def actual_exclusions(*args):
+                self.assertFalse(completed, "completion decision must acquire no more metadata")
+                return exclusions(*args)
+            with self.subTest(outcome=outcome, cancelled=cancel_after):
+                try:
+                    with patch("devspace.plans._review_docker_scope", return_value=copy.deepcopy(control)), \
+                            patch("devspace.git_worktree._administration_state", side_effect=final_read), \
+                            patch("devspace.git_inventory._git", side_effect=actual_native), \
+                            patch("devspace.git_inventory._check_exclusions", side_effect=actual_exclusions), \
+                            patch("devspace.plans.time.monotonic", side_effect=lambda: clock[0]):
+                        report = self.owner().review_scope(config, mode="global", assessment=assessment, git_lineage=request,
+                                                           cancelled=lambda: completed and cancel_after, timeout=10)
+                    self.assertEqual(report["cancelled"], cancel_after)
+                    lineage = report["git_lineage"]
+                    self.assertEqual(lineage["integration"]["source_commit"], request["integration"]["source_commit"])
+                    self.assertEqual(lineage["integration"]["squash_provenance"], "unverified")
+                    if outcome == "unchanged" and not cancel_after:
+                        self.assertEqual(lineage["status"], "observed")
+                        self.assertIs(lineage["patch_equivalence"]["equal"], True)
+                    else:
+                        self.assertFalse(report["coverage"]["complete"])
+                        self.assertEqual(lineage["status"], "not_examined" if cancel_after else "changed")
+                        self.assertIsNone(lineage["patch_equivalence"]["equal"])
+                        self.assertIsNone(lineage["retention"]["head_in_ref"])
+                    for key in ("candidates", "scope_roots", "plan", "size"):
+                        self.assertEqual(report[key], control[key], key)
+                finally:
+                    self.assertEqual(reads, 2)
+                    self.assertEqual(deltas, 2)
+                    self.assertEqual(test_git_inventory.lineage_snapshot(fixture.fixture), expected_git)
+                    self.assertEqual(test_git_inventory.lineage_snapshot(self.base), before_ordinary)
+                    if drift_path is not None:
+                        if drift_original is None: drift_path.unlink()
+                        else: drift_path.write_bytes(drift_original)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -403,10 +403,15 @@ def validate_manifest(manifest):
     return manifest
 
 
-def review_scope(selected, *, npm_caches=(), **options):
+def review_scope(selected, *, npm_caches=(), git_lineage=None, **options):
     """Explicit optional cache discovery and v4 native selection, same journey."""
     from . import npm_cache
     deadline = time.monotonic() + options.get("timeout", 10.0)
+    if git_lineage is not None:
+        from .git_inventory import validate_lineage_request
+        git_lineage = validate_lineage_request(git_lineage)
+        if options.get("mode", "task") not in {"project", "global"}:
+            raise ValueError("Git lineage requires project or global review")
     assessment = options.get("assessment")
     if assessment and assessment.get("schema_version") == 4:
         _validate_assessment(assessment)
@@ -476,6 +481,27 @@ def review_scope(selected, *, npm_caches=(), **options):
             except (ValueError, OSError, KeyError, TypeError, npm_cache.InspectionUnavailable):
                 report["npm_caches"].append({"cache": cache, "coverage": "unavailable", "reason": "optional tool/cache inspection unsupported or incomplete", "entries": []})
         if any(item["coverage"] != "examined" for item in report["npm_caches"]):
+            report["coverage"]["complete"] = False
+    if git_lineage is not None:
+        from .git_inventory import observe_lineage, _lineage_result, InspectionCancelled, InspectionUnavailable
+        report["git_lineage"] = _lineage_result(claim=git_lineage.get("integration"))
+        host_matches = options.get("mode") != "global" or selected.get("host_identity", report["host"]["identity"]) == report["host"]["identity"]
+        if not report["invalid_scope"] and not report["cancelled"] and host_matches and time.monotonic() < deadline:
+            inventories = report.get("git_inventories", []) if options.get("mode") == "global" else [
+                {"path": report["scope"]["canonical"], **report.get("git", {})}]
+            matches = [(item, row) for item in inventories if item.get("path") == git_lineage["repository"]
+                       for row in item.get("worktrees", []) if row.get("path") == git_lineage["path"] and row.get("status_complete")]
+            if len(matches) == 1:
+                try:
+                    report["git_lineage"] = observe_lineage(Path(matches[0][0]["path"]), matches[0][1], git_lineage,
+                        exclusions=tuple(report["plan"]["policy"]["exclusions"]), deadline=deadline,
+                        cancelled=options.get("cancelled"))
+                except (KeyboardInterrupt, InspectionCancelled):
+                    report["cancelled"] = True
+                    report["coverage"]["stop_reason"] = "Git lineage cancelled"
+                except InspectionUnavailable:
+                    report["git_lineage"] = _lineage_result("unavailable", "inspection_unavailable", claim=git_lineage.get("integration"))
+        if report["git_lineage"]["status"] != "observed":
             report["coverage"]["complete"] = False
     return report
 
